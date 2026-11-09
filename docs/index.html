@@ -25,7 +25,7 @@
   .row { display:flex; gap:8px; }
   .row > * { flex:1; }
   .copy { display:flex; align-items:center; gap:8px; background:#0b0d10; border:1px solid var(--line); border-radius:10px; padding:8px 8px 8px 12px; margin-top:6px; }
-  .copy code { flex:1; font-size:13px; word-break:break-all; color:var(--text); }
+  .copy code { flex:1; font-size:13px; overflow-wrap:anywhere; color:var(--text); }
   .copy button { background:var(--line); color:var(--text); border:0; border-radius:8px; padding:7px 10px; font-size:13px; }
   .pill { display:inline-block; font-size:12px; padding:3px 9px; border-radius:20px; background:var(--line); color:var(--dim); }
   .pill.ok { background:rgba(62,207,142,.15); color:var(--good); }
@@ -36,45 +36,67 @@
   .save .btn { margin:0; padding:15px; font-size:16px; }
   a { color:var(--blue2); }
   details summary { color:var(--dim); font-size:14px; cursor:pointer; }
+  .next { background:rgba(62,106,225,.14); border:1px solid rgba(62,106,225,.45); border-radius:14px; padding:14px 16px; margin-bottom:14px; font-size:15px; }
+  .next.bad { background:rgba(229,72,77,.12); border-color:rgba(229,72,77,.45); }
+  .next b { color:#fff; }
+  .done h2 .num { font-size:0; }
+  .done h2 .num::after { content:"✓"; font-size:14px; }
+  .hint { font-size:13px; margin-top:6px; color:var(--dim); }
+  .hint.bad { color:var(--bad); }
+  .sheet { margin-top:10px; border-top:1px solid var(--line); padding-top:6px; }
+  .sheet .f { display:flex; align-items:flex-start; gap:8px; padding:9px 0; border-bottom:1px solid var(--line); }
+  .sheet .f:last-child { border-bottom:0; }
+  .sheet .k { width:42%; font-size:13px; color:var(--dim); }
+  .sheet .v { flex:1; font-size:13.5px; overflow-wrap:anywhere; }
+  .sheet button { background:var(--line); color:var(--text); border:0; border-radius:8px; padding:5px 9px; font-size:12px; flex:none; }
+  .linkbox { margin-top:10px; }
+  .linkbox .copy { margin-top:0; }
+  .linkbox .hint { margin-top:6px; }
 </style>
 </head>
 <body>
 <h1>Tesla Remote</h1>
 <div class="sub">Free, open-source Tesla control for Pebble. Everything runs on your phone.</div>
 
-<div class="card">
-  <div class="status" id="status"></div>
-  <div class="warn" id="warn"></div>
-</div>
+<div class="next" id="next"></div>
+<div class="status" id="status" style="margin:-4px 0 14px"></div>
 
 <div class="card" id="s1">
   <h2><span class="num">1</span>Your car key</h2>
   <p>This phone made a private key for your car. Only the public half below ever leaves your phone.</p>
   <textarea id="pem" readonly></textarea>
-  <button class="btn ghost" onclick="copyText(pem.value, this)">Copy public key</button>
+  <div class="row">
+    <button class="btn ghost" onclick="copyText(pem.value, this)">Copy public key</button>
+    <button class="btn ghost" id="shareBtn" style="display:none" onclick="shareKey()">Share…</button>
+  </div>
 </div>
 
 <div class="card" id="s2">
   <h2><span class="num">2</span>Host the public key</h2>
-  <p>Tesla needs to see your public key on a website. Fleet Key does this for free: open it, paste the key, tap <b>Create</b>, then copy the address it gives you (like <code>abc12.fleetkey.net</code>).</p>
-  <a class="btn ghost" href="https://fleetkey.net" target="_blank" rel="noopener">Open Fleet Key</a>
+  <p>Tesla needs to see your public key on a website. <b>Fleet Key</b> does this for free.</p>
+  <p>1. Tap <b>Copy public key</b> above.<br>2. Copy the Fleet Key link below and paste it into Safari or Chrome.<br>3. Paste your key there and tap <b>Create</b>.<br>4. Copy the address it shows (like <code>abc12.fleetkey.net</code>), come back here, and paste it below.</p>
+  <div class="linkbox">
+    <div class="copy"><code>https://fleetkey.net</code><button onclick="copyText('https://fleetkey.net', this)">Copy link</button></div>
+  </div>
   <label for="domain">Key address from Fleet Key</label>
-  <input id="domain" placeholder="abc12.fleetkey.net" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <input id="domain" placeholder="abc12.fleetkey.net" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url">
+  <div class="hint" id="domainHint"></div>
 </div>
 
 <div class="card" id="s3">
   <h2><span class="num">3</span>Create your Tesla developer app</h2>
-  <p>On Tesla's developer site, choose <b>Create Application</b>. Use any name, then fill these in:</p>
-  <label>Allowed origin</label>
-  <div class="copy"><code id="origin">https://fleetkey.net</code><button onclick="copyText(origin.textContent, this)">Copy</button></div>
-  <label>Allowed redirect URI</label>
-  <div class="copy"><code id="redirect"></code><button onclick="copyText(redirect.textContent, this)">Copy</button></div>
-  <p style="margin-top:10px">Scopes to tick: <b>Vehicle Information</b>, <b>Vehicle Commands</b>, <b>Vehicle Charging Management</b>. Tesla gives every account a monthly credit that covers normal personal use.</p>
-  <a class="btn ghost" href="https://developer.tesla.com/request" target="_blank" rel="noopener">Open Tesla developer site</a>
+  <p>Copy this link into Safari or Chrome (or open it on a computer), sign in, and choose <b>Create Application</b>. Fill in Tesla's form using the cheat sheet below. Tesla may word things slightly differently.</p>
+  <div class="linkbox">
+    <div class="copy"><code>https://developer.tesla.com/request</code><button onclick="copyText('https://developer.tesla.com/request', this)">Copy link</button></div>
+  </div>
+  <div class="sheet" id="sheet"></div>
+  <p style="margin-top:10px">When Tesla shows your new app, copy its <b>Client ID</b> and <b>Client Secret</b> into the boxes below. Tesla gives every account a monthly credit that covers normal personal use, so you don't need to add billing details.</p>
   <label for="clientId">Client ID</label>
   <input id="clientId" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <div class="hint" id="clientIdHint"></div>
   <label for="clientSecret">Client secret</label>
   <input id="clientSecret" type="password" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <div class="hint" id="secretHint"></div>
   <label for="region">Where is your car?</label>
   <select id="region">
     <option value="na">North America / Asia-Pacific</option>
@@ -84,16 +106,17 @@
 
 <div class="card" id="s4">
   <h2><span class="num">4</span>Sign in with Tesla</h2>
-  <p>You'll log in on Tesla's own page. Your password never touches this app.</p>
+  <p>This one happens right here. You'll log in on Tesla's own page and come straight back. Your password never touches this app.</p>
   <button class="btn" id="signin" onclick="signIn()">Sign in with Tesla</button>
-  <p id="signinNote"></p>
+  <div class="hint" id="signinHint"></div>
 </div>
 
 <div class="card" id="s5">
   <h2><span class="num">5</span>Add the key to your car</h2>
-  <p>After you've signed in and saved, open this link on your phone. The Tesla app will ask you to approve the key. Do this near the car.</p>
-  <div class="copy"><code id="pairLink">tesla.com/_ak/…</code><button onclick="copyText('https://' + pairLink.textContent, this)">Copy</button></div>
-  <a class="btn ghost" id="pairBtn" href="#" target="_blank" rel="noopener">Open pairing link</a>
+  <p>Do this after you've signed in and tapped <b>Save to watch</b>. Copy the link, paste it into Safari or Chrome on this phone, and the Tesla app will ask you to approve the key. Be near your car.</p>
+  <div class="linkbox">
+    <div class="copy"><code id="pairLink">tesla.com/_ak/…</code><button onclick="copyText('https://' + pairLink.textContent, this)">Copy link</button></div>
+  </div>
 </div>
 
 <div class="card">
@@ -113,6 +136,7 @@
   <details style="margin-top:14px"><summary>Advanced</summary>
     <button class="btn ghost" onclick="newKey()">Make a new car key</button>
     <button class="btn ghost" onclick="signOut()">Sign out of Tesla</button>
+    <button class="btn ghost" onclick="clearDraft()">Throw away unsaved changes</button>
   </details>
 </div>
 
@@ -122,6 +146,7 @@
 var $ = function (id) { return document.getElementById(id); };
 var REDIRECT = location.origin + location.pathname;
 var SCOPES = 'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds';
+var FIELDS = ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit'];
 var state = { current: {}, privHex: '', pubHex: '', code: '', signOut: false, returnTo: '' };
 
 function b64uToHex(s) {
@@ -141,15 +166,38 @@ function pemFromPub(pubHex) {
   for (var i = 0; i < b.length; i += 64) out += b.substr(i, 64) + '\n';
   return out + '-----END PUBLIC KEY-----';
 }
+function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 function copyText(t, btn) {
-  function ok() { var o = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = o; }, 1500); }
-  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(ok, fallback); else fallback();
+  function ok() { if (!btn) return; var o = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = o; }, 1500); }
   function fallback() { var ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); ok(); } catch (e) {} ta.remove(); }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(ok, fallback); else fallback();
 }
-function cleanDomain(d) { return String(d || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase(); }
+function shareKey() { navigator.share({ title: 'Tesla Remote public key', text: $('pem').value }).catch(function () {}); }
+function cleanDomain(d) { return String(d || '').trim().replace(/^https?:\/\//i, '').replace(/[\/?#].*$/, '').replace(/\.$/, '').toLowerCase(); }
 
+// ---------- checks ----------
+function checkDomain(d) {
+  if (!d) return '';
+  if (/\s/.test(d) || !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(d)) return 'That doesn\'t look like a web address. It should look like abc12.fleetkey.net';
+  if (d === 'fleetkey.net') return 'Use your own address from Fleet Key (with the letters in front), not fleetkey.net itself.';
+  return '';
+}
+function checkClientId(v) {
+  if (!v) return '';
+  if (/\s/.test(v)) return 'Remove the spaces.';
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) return 'Tesla Client IDs usually look like 1a2b3c4d-1234-…. Double-check you copied the Client ID, not the secret.';
+  return '';
+}
+function checkSecret(v) {
+  if (!v) return '';
+  if (/\s/.test(v)) return 'Remove the spaces.';
+  if (checkClientId(v) === '') return 'This looks like a Client ID. Paste the Client Secret here instead.';
+  return '';
+}
+
+// ---------- key ----------
 function makeKey() {
-  if (!window.crypto || !crypto.subtle) { $('warn').textContent = 'This phone browser cannot make keys. Please update your phone.'; return Promise.resolve(); }
+  if (!window.crypto || !crypto.subtle) { setNext('This phone\'s browser can\'t make keys. Please update your phone or the Pebble app.', true); return Promise.resolve(); }
   return crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']).then(function (kp) {
     return crypto.subtle.exportKey('jwk', kp.privateKey);
   }).then(function (jwk) {
@@ -162,58 +210,102 @@ function newKey() {
   if (!confirm('Make a new key? You will need to host it and add it to your car again.')) return;
   makeKey().then(render);
 }
-function signOut() { state.signOut = true; state.code = ''; state.current.signedIn = false; persist(); render(); }
+function signOut() { state.signOut = true; state.code = ''; persist(); render(); }
 
+// ---------- draft autosave ----------
 function readForm() {
   var f = {};
-  ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit'].forEach(function (k) { f[k] = $(k).value; });
+  FIELDS.forEach(function (k) { f[k] = $(k).value; });
   f.domain = cleanDomain(f.domain);
   return f;
 }
 function persist() {
   var saved = { current: state.current, privHex: state.privHex, pubHex: state.pubHex, code: state.code,
-    signOut: state.signOut, returnTo: state.returnTo, form: document.readyState !== 'loading' ? readForm() : null };
+    signOut: state.signOut, returnTo: state.returnTo, form: readForm(), at: Date.now() };
   try { localStorage.setItem('tr_setup', JSON.stringify(saved)); } catch (e) {}
 }
 function restore() { try { return JSON.parse(localStorage.getItem('tr_setup') || 'null'); } catch (e) { return null; } }
+function clearDraft() {
+  if (!confirm('Throw away everything you haven\'t saved to the watch yet?')) return;
+  try { localStorage.removeItem('tr_setup'); } catch (e) {}
+  location.reload();
+}
 
+// ---------- rendering ----------
+function setNext(html, bad) { $('next').innerHTML = html; $('next').className = 'next' + (bad ? ' bad' : ''); }
+function sheetRow(k, v, copy) {
+  return '<div class="f"><div class="k">' + k + '</div><div class="v">' + v + '</div>' +
+    (copy ? '<button onclick="copyText(\'' + copy.replace(/'/g, "\\'") + '\', this)">Copy</button>' : '') + '</div>';
+}
 function render() {
-  var c = state.current, pub = state.pubHex || c.pubHex;
+  var c = state.current, pub = state.pubHex || c.pubHex, f = readForm();
+  var d = f.domain;
   $('pem').value = pemFromPub(pub);
-  var d = cleanDomain($('domain').value);
   $('pairLink').textContent = 'tesla.com/_ak/' + (d || '…');
-  $('pairBtn').href = d ? 'https://tesla.com/_ak/' + d : '#';
-  $('redirect').textContent = REDIRECT;
+  var origin = (!d || /(^|\.)fleetkey\.net$/.test(d)) ? 'https://fleetkey.net' : 'https://' + d;
+  $('sheet').innerHTML =
+    sheetRow('Application name', 'Anything, e.g. <b>My Pebble Tesla</b>') +
+    sheetRow('Description / purpose', 'Anything, e.g. <b>Personal smartwatch remote</b>') +
+    sheetRow('OAuth grant type', '<b>Authorization Code and Machine-to-Machine</b>') +
+    sheetRow('Allowed origin URL', esc(origin), origin) +
+    sheetRow('Allowed redirect URI', esc(REDIRECT), REDIRECT) +
+    sheetRow('Allowed returned URL', 'Leave empty') +
+    sheetRow('Scopes', 'Tick <b>Vehicle Information</b>, <b>Vehicle Commands</b> and <b>Vehicle Charging Management</b>') +
+    sheetRow('Billing', 'Skip it');
+
+  var dh = checkDomain(d), ch = checkClientId(f.clientId), sh = checkSecret(f.clientSecret);
+  $('domainHint').textContent = dh; $('domainHint').className = 'hint' + (dh ? ' bad' : '');
+  $('clientIdHint').textContent = ch; $('clientIdHint').className = 'hint' + (/\s/.test(f.clientId) ? ' bad' : '');
+  $('secretHint').textContent = sh || (c.hasSecret && !f.clientSecret ? 'Your secret is already saved. Leave this blank to keep it.' : '');
+  $('secretHint').className = 'hint' + (/\s/.test(f.clientSecret) ? ' bad' : '');
+  $('clientSecret').placeholder = c.hasSecret ? 'Saved' : '';
+
+  var hasSecret = !!f.clientSecret || c.hasSecret;
+  var step2 = !!d && !dh, step3 = !!f.clientId && !/\s/.test(f.clientId) && hasSecret && !/\s/.test(f.clientSecret);
   var signedIn = !!(state.code || (c.signedIn && !state.signOut));
+  var cars = (c.vehicles || []).length;
+  ['s1', 's2', 's3', 's4', 's5'].forEach(function (id, i) {
+    var done = [!!pub, step2, step3, signedIn, !!c.paired][i];
+    $(id).className = 'card' + (done ? ' done' : '');
+  });
+
+  var missing = [];
+  if (!step2) missing.push('your key address (step 2)');
+  if (!step3) missing.push('your Client ID and secret (step 3)');
+  $('signin').disabled = missing.length > 0;
+  $('signinHint').textContent = state.code ? 'Signed in. Tap "Save to watch" at the bottom to finish.' :
+    (missing.length ? 'First fill in ' + missing.join(' and ') + '.' : '');
+
+  // What to do next
+  if (!pub) setNext('Making your car key…');
+  else if (c.bigint === false) setNext('Your Pebble phone app is too old to sign car commands. Please update it.', true);
+  else if (state.code) setNext('<b>Almost done:</b> tap <b>Save to watch</b> at the bottom. Your watch will finish connecting to Tesla.');
+  else if (c.registerError && signedIn) setNext('<b>Tesla registration problem:</b> ' + esc(c.registerError) + '<br>Check your key address (step 2) and the allowed origin in your Tesla app (step 3), then sign in again.', true);
+  else if (c.needPair && signedIn) setNext('<b>Last step:</b> your car doesn\'t know this key yet. Do step 5 near your car.', true);
+  else if (signedIn && cars && c.paired) setNext('<b>All set.</b> Your watch is connected to ' + esc((c.vehicles.filter(function (v) { return v.vin === c.vin; })[0] || c.vehicles[0]).name) + '.');
+  else if (signedIn && cars) setNext('<b>Last step:</b> add the key to your car (step 5), then try <b>More → Flash lights</b> on the watch.');
+  else if (signedIn) setNext('Signed in. If your watch hasn\'t found your car, close this page and open it again in a minute.');
+  else if (!step2) setNext('<b>Next:</b> host your public key on Fleet Key (step 2).');
+  else if (!step3) setNext('<b>Next:</b> create your Tesla developer app (step 3).');
+  else setNext('<b>Next:</b> tap <b>Sign in with Tesla</b> (step 4).');
+
   var pills = [];
-  pills.push(pub ? ['Key ready', 'ok'] : ['No key', 'err']);
-  pills.push(d ? ['Key hosted', 'ok'] : ['Key not hosted', '']);
-  pills.push(signedIn ? [state.code ? 'Signed in (save to finish)' : 'Signed in', 'ok'] : ['Not signed in', '']);
-  if (c.vehicles && c.vehicles.length) pills.push([c.vehicles.length + ' car' + (c.vehicles.length > 1 ? 's' : ''), 'ok']);
+  if (signedIn && !state.code) pills.push(['Signed in', 'ok']);
+  if (cars) pills.push([cars + ' car' + (cars > 1 ? 's' : ''), 'ok']);
   $('status').innerHTML = pills.map(function (p) { return '<span class="pill ' + p[1] + '">' + p[0] + '</span>'; }).join('');
-  var warn = '';
-  if (c.registerError) warn = 'Tesla registration problem: ' + c.registerError + '. Check the key address and allowed origin, then sign in again.';
-  if (c.bigint === false) warn = 'Your Pebble phone app is too old to sign car commands. Please update it.';
-  $('warn').textContent = warn;
-  $('s1').className = 'card' + (pub ? ' done' : '');
-  $('s2').className = 'card' + (d ? ' done' : '');
-  $('s3').className = 'card' + ($('clientId').value ? ' done' : '');
-  $('s4').className = 'card' + (signedIn ? ' done' : '');
-  $('signinNote').textContent = state.code ? 'Signed in. Tap "Save to watch" to finish.' : '';
-  $('clientSecret').placeholder = c.hasSecret ? 'Saved (leave blank to keep)' : '';
-  if (c.vehicles && c.vehicles.length) {
+
+  if (cars) {
     $('carRow').style.display = '';
-    $('vin').innerHTML = c.vehicles.map(function (v) { return '<option value="' + v.vin + '">' + (v.name || v.vin) + '</option>'; }).join('');
-    $('vin').value = c.vin || c.vehicles[0].vin;
+    var keep = $('vin').value;
+    $('vin').innerHTML = c.vehicles.map(function (v) { return '<option value="' + esc(v.vin) + '">' + esc(v.name || v.vin) + '</option>'; }).join('');
+    $('vin').value = keep || c.vin || c.vehicles[0].vin;
   }
 }
 
 function signIn() {
   var f = readForm();
-  if (!f.clientId) { alert('Enter your Client ID first (step 3).'); return; }
-  if (!f.clientSecret && !state.current.hasSecret) { alert('Enter your Client secret first (step 3).'); return; }
-  if (!f.domain) { alert('Enter your key address first (step 2).'); return; }
-  var nonce = Math.random().toString(36).slice(2);
+  if ($('signin').disabled) return;
+  var nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
   state.signOut = false;
   persist();
   localStorage.setItem('tr_oauth_state', nonce);
@@ -236,34 +328,40 @@ function save() {
   location.href = ret + encodeURIComponent(JSON.stringify(out));
 }
 
+function fillForm(src) { Object.keys(src || {}).forEach(function (k) { if ($(k) && src[k] != null && src[k] !== '') $(k).value = src[k]; }); }
+
 (function init() {
   var q = new URLSearchParams(location.search);
-  var saved = restore();
-  if (q.get('code') && saved) {
-    // Back from Tesla's login page.
-    state = { current: saved.current || {}, privHex: saved.privHex || '', pubHex: saved.pubHex || '', code: '',
-      signOut: false, returnTo: saved.returnTo || '' };
-    if (q.get('state') === localStorage.getItem('tr_oauth_state')) state.code = q.get('code');
-    else $('warn').textContent = 'Sign-in check failed. Please try again.';
-    if (saved.form) Object.keys(saved.form).forEach(function (k) { if ($(k) && saved.form[k] != null) $(k).value = saved.form[k]; });
+  var draft = restore();
+  var fromHash = null;
+  try { fromHash = location.hash.length > 1 ? JSON.parse(decodeURIComponent(location.hash.slice(1))) : null; } catch (e) { fromHash = null; }
+
+  if (q.get('code') || q.get('error')) {
+    // Back from Tesla's login page: everything we need is in the draft.
+    if (draft) {
+      state = { current: draft.current || {}, privHex: draft.privHex || '', pubHex: draft.pubHex || '', code: '',
+        signOut: false, returnTo: draft.returnTo || '' };
+      fillForm(draft.form);
+    }
+    if (q.get('code') && draft && q.get('state') === localStorage.getItem('tr_oauth_state')) state.code = q.get('code');
+    else if (q.get('error')) setTimeout(function () { setNext('Tesla sign-in was cancelled or failed: ' + esc(q.get('error_description') || q.get('error')), true); }, 0);
+    else setTimeout(function () { setNext('Sign-in check failed. Please tap Sign in with Tesla again.', true); }, 0);
     history.replaceState(null, '', REDIRECT);
-  } else if (q.get('error')) {
-    state = saved ? { current: saved.current || {}, privHex: saved.privHex || '', pubHex: saved.pubHex || '', code: '', signOut: false, returnTo: saved.returnTo || '' } : state;
-    if (saved && saved.form) Object.keys(saved.form).forEach(function (k) { if ($(k) && saved.form[k] != null) $(k).value = saved.form[k]; });
-    $('warn').textContent = 'Tesla sign-in was cancelled or failed: ' + (q.get('error_description') || q.get('error'));
+    persist();
   } else {
-    try { state.current = JSON.parse(decodeURIComponent(location.hash.slice(1)) || '{}'); } catch (e) { state.current = {}; }
-    state.returnTo = q.get('return_to') || '';
+    state.current = fromHash || (draft && draft.current) || {};
+    state.returnTo = q.get('return_to') || (draft && draft.returnTo) || '';
     var c = state.current;
-    $('domain').value = c.domain || '';
-    $('clientId').value = c.clientId || '';
-    $('region').value = c.region || 'na';
-    $('carName').value = c.carName || '';
-    $('tempUnit').value = c.tempUnit || '';
-    $('distUnit').value = c.distUnit || '';
+    fillForm({ domain: c.domain, clientId: c.clientId, region: c.region || 'na', carName: c.carName, tempUnit: c.tempUnit, distUnit: c.distUnit });
+    // Unsaved work from last time wins, so hopping out to a browser and back loses nothing.
+    if (draft && draft.form) fillForm(draft.form);
+    if (draft && draft.privHex) { state.privHex = draft.privHex; state.pubHex = draft.pubHex; }
+    if (draft && draft.signOut) state.signOut = true;
   }
-  ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit'].forEach(function (k) {
+  if (navigator.share) $('shareBtn').style.display = '';
+  FIELDS.forEach(function (k) {
     $(k).addEventListener('input', function () { persist(); render(); });
+    $(k).addEventListener('change', function () { persist(); render(); });
   });
   if (!state.current.pubHex && !state.pubHex) makeKey().then(render); else render();
 })();

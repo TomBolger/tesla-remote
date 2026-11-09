@@ -139,12 +139,15 @@ function runCommand(id, value) {
   var arg = value;
   if (name === 'set_temp') arg = value / 10;
   T.command(name, arg, progress, function (e) {
+    var cfg = T.cfg();
     if (e) {
       send({ Type: TYPE.RESULT, Cmd: id, Value: 0, Text: e.text });
       var st = stateForError(e);
+      if (st === STATE.PAIR) { cfg.needPair = true; cfg.paired = false; T.saveCfg(cfg); }
       if (st === STATE.PAIR || st === STATE.SETUP) sendCached(st, e.text);
       return;
     }
+    if (!cfg.paired || cfg.needPair) { cfg.paired = true; cfg.needPair = false; T.saveCfg(cfg); }
     send({ Type: TYPE.RESULT, Cmd: id, Value: 1, Text: 'Done' });
     optimistic(name, arg);
     clearTimeout(refreshTimer);
@@ -172,6 +175,7 @@ Pebble.addEventListener('showConfiguration', function () {
     region: c.region || 'na', pubHex: c.pubHex || '', signedIn: !!tk.refresh,
     vehicles: c.vehicles || [], vin: c.vin || '', carName: c.carName || '',
     tempUnit: c.tempUnit || '', distUnit: c.distUnit || '', registerError: c.registerError || '',
+    paired: !!c.paired, needPair: !!c.needPair,
     bigint: C.haveBigInt()
   };
   Pebble.openURL(CONFIG_URL + '#' + encodeURIComponent(JSON.stringify(current)));
@@ -193,6 +197,7 @@ Pebble.addEventListener('webviewclosed', function (e) {
     var keyChanged = r.privHex !== c.privHex;
     c.privHex = r.privHex;
     try { c.pubHex = C.bytesToHex(C.publicFromPrivate(r.privHex)); } catch (x) { c.pubHex = r.pubHex || ''; }
+    if (keyChanged) { c.paired = false; c.needPair = false; }
     if (keyChanged) (c.vehicles || []).concat([{ vin: c.vin }]).forEach(function (v) {
       localStorage.removeItem('tr_sess_' + v.vin + '_2'); localStorage.removeItem('tr_sess_' + v.vin + '_3');
     });
