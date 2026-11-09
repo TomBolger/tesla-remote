@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tesla Remote setup</title>
+<style>
+  :root { --bg:#000; --card:#171a20; --line:#2b2f36; --text:#eef0f3; --dim:#9aa1ab; --blue:#3e6ae1; --blue2:#5b82f0; --good:#3ecf8e; --bad:#e5484d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding:20px 16px 110px; }
+  h1 { font-size:24px; font-weight:600; margin:4px 0 2px; letter-spacing:.2px; }
+  .sub { color:var(--dim); font-size:14px; margin-bottom:18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .card h2 { font-size:15px; font-weight:600; margin:0 0 8px; display:flex; align-items:center; gap:10px; }
+  .num { width:24px; height:24px; border-radius:12px; background:var(--line); color:var(--text); display:inline-flex; align-items:center; justify-content:center; font-size:13px; flex:none; }
+  .done .num { background:var(--blue); }
+  p { margin:6px 0 10px; color:var(--dim); font-size:14px; }
+  label { display:block; font-size:13px; color:var(--dim); margin:12px 0 4px; }
+  input, select, textarea { width:100%; background:#0b0d10; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:11px 12px; font-size:15px; font-family:inherit; }
+  textarea { font-family:ui-monospace, Menlo, Consolas, monospace; font-size:11.5px; height:118px; resize:none; }
+  input:focus, select:focus { outline:none; border-color:var(--blue); }
+  .btn { display:block; width:100%; text-align:center; text-decoration:none; background:var(--blue); color:#fff; border:0; border-radius:10px; padding:13px; font-size:15px; font-weight:600; margin-top:10px; cursor:pointer; }
+  .btn.ghost { background:transparent; border:1px solid var(--line); color:var(--text); }
+  .btn:disabled { opacity:.45; }
+  .row { display:flex; gap:8px; }
+  .row > * { flex:1; }
+  .copy { display:flex; align-items:center; gap:8px; background:#0b0d10; border:1px solid var(--line); border-radius:10px; padding:8px 8px 8px 12px; margin-top:6px; }
+  .copy code { flex:1; font-size:13px; word-break:break-all; color:var(--text); }
+  .copy button { background:var(--line); color:var(--text); border:0; border-radius:8px; padding:7px 10px; font-size:13px; }
+  .pill { display:inline-block; font-size:12px; padding:3px 9px; border-radius:20px; background:var(--line); color:var(--dim); }
+  .pill.ok { background:rgba(62,207,142,.15); color:var(--good); }
+  .pill.err { background:rgba(229,72,77,.15); color:var(--bad); }
+  .status { display:flex; flex-wrap:wrap; gap:6px; }
+  .warn { color:var(--bad); font-size:13px; }
+  .save { position:fixed; left:0; right:0; bottom:0; padding:12px 16px 18px; background:linear-gradient(transparent, #000 30%); }
+  .save .btn { margin:0; padding:15px; font-size:16px; }
+  a { color:var(--blue2); }
+  details summary { color:var(--dim); font-size:14px; cursor:pointer; }
+</style>
+</head>
+<body>
+<h1>Tesla Remote</h1>
+<div class="sub">Free, open-source Tesla control for Pebble. Everything runs on your phone.</div>
+
+<div class="card">
+  <div class="status" id="status"></div>
+  <div class="warn" id="warn"></div>
+</div>
+
+<div class="card" id="s1">
+  <h2><span class="num">1</span>Your car key</h2>
+  <p>This phone made a private key for your car. Only the public half below ever leaves your phone.</p>
+  <textarea id="pem" readonly></textarea>
+  <button class="btn ghost" onclick="copyText(pem.value, this)">Copy public key</button>
+</div>
+
+<div class="card" id="s2">
+  <h2><span class="num">2</span>Host the public key</h2>
+  <p>Tesla needs to see your public key on a website. Fleet Key does this for free: open it, paste the key, tap <b>Create</b>, then copy the address it gives you (like <code>abc12.fleetkey.net</code>).</p>
+  <a class="btn ghost" href="https://fleetkey.net" target="_blank" rel="noopener">Open Fleet Key</a>
+  <label for="domain">Key address from Fleet Key</label>
+  <input id="domain" placeholder="abc12.fleetkey.net" autocapitalize="off" autocorrect="off" spellcheck="false">
+</div>
+
+<div class="card" id="s3">
+  <h2><span class="num">3</span>Create your Tesla developer app</h2>
+  <p>On Tesla's developer site, choose <b>Create Application</b>. Use any name, then fill these in:</p>
+  <label>Allowed origin</label>
+  <div class="copy"><code id="origin">https://fleetkey.net</code><button onclick="copyText(origin.textContent, this)">Copy</button></div>
+  <label>Allowed redirect URI</label>
+  <div class="copy"><code id="redirect"></code><button onclick="copyText(redirect.textContent, this)">Copy</button></div>
+  <p style="margin-top:10px">Scopes to tick: <b>Vehicle Information</b>, <b>Vehicle Commands</b>, <b>Vehicle Charging Management</b>. Tesla gives every account a monthly credit that covers normal personal use.</p>
+  <a class="btn ghost" href="https://developer.tesla.com/request" target="_blank" rel="noopener">Open Tesla developer site</a>
+  <label for="clientId">Client ID</label>
+  <input id="clientId" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label for="clientSecret">Client secret</label>
+  <input id="clientSecret" type="password" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label for="region">Where is your car?</label>
+  <select id="region">
+    <option value="na">North America / Asia-Pacific</option>
+    <option value="eu">Europe / Middle East / Africa</option>
+  </select>
+</div>
+
+<div class="card" id="s4">
+  <h2><span class="num">4</span>Sign in with Tesla</h2>
+  <p>You'll log in on Tesla's own page. Your password never touches this app.</p>
+  <button class="btn" id="signin" onclick="signIn()">Sign in with Tesla</button>
+  <p id="signinNote"></p>
+</div>
+
+<div class="card" id="s5">
+  <h2><span class="num">5</span>Add the key to your car</h2>
+  <p>After you've signed in and saved, open this link on your phone. The Tesla app will ask you to approve the key. Do this near the car.</p>
+  <div class="copy"><code id="pairLink">tesla.com/_ak/…</code><button onclick="copyText('https://' + pairLink.textContent, this)">Copy</button></div>
+  <a class="btn ghost" id="pairBtn" href="#" target="_blank" rel="noopener">Open pairing link</a>
+</div>
+
+<div class="card">
+  <h2>Preferences</h2>
+  <div id="carRow" style="display:none">
+    <label for="vin">Car</label>
+    <select id="vin"></select>
+  </div>
+  <label for="carName">Name shown on watch (optional)</label>
+  <input id="carName" maxlength="24">
+  <div class="row">
+    <div><label for="tempUnit">Temperature</label>
+      <select id="tempUnit"><option value="">Same as car</option><option value="F">°F</option><option value="C">°C</option></select></div>
+    <div><label for="distUnit">Distance</label>
+      <select id="distUnit"><option value="">Same as car</option><option value="mi">Miles</option><option value="km">Kilometers</option></select></div>
+  </div>
+  <details style="margin-top:14px"><summary>Advanced</summary>
+    <button class="btn ghost" onclick="newKey()">Make a new car key</button>
+    <button class="btn ghost" onclick="signOut()">Sign out of Tesla</button>
+  </details>
+</div>
+
+<div class="save"><button class="btn" onclick="save()">Save to watch</button></div>
+
+<script>
+var $ = function (id) { return document.getElementById(id); };
+var REDIRECT = location.origin + location.pathname;
+var SCOPES = 'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds';
+var state = { current: {}, privHex: '', pubHex: '', code: '', signOut: false, returnTo: '' };
+
+function b64uToHex(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '=';
+  var bin = atob(s), h = '';
+  for (var i = 0; i < bin.length; i++) h += ('0' + bin.charCodeAt(i).toString(16)).slice(-2);
+  return h;
+}
+function hexToB64(h) {
+  var bin = ''; for (var i = 0; i < h.length; i += 2) bin += String.fromCharCode(parseInt(h.substr(i, 2), 16));
+  return btoa(bin);
+}
+function pemFromPub(pubHex) {
+  if (!pubHex) return '';
+  var der = '3059301306072a8648ce3d020106082a8648ce3d030107034200' + pubHex;
+  var b = hexToB64(der), out = '-----BEGIN PUBLIC KEY-----\n';
+  for (var i = 0; i < b.length; i += 64) out += b.substr(i, 64) + '\n';
+  return out + '-----END PUBLIC KEY-----';
+}
+function copyText(t, btn) {
+  function ok() { var o = btn.textContent; btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = o; }, 1500); }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(ok, fallback); else fallback();
+  function fallback() { var ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); ok(); } catch (e) {} ta.remove(); }
+}
+function cleanDomain(d) { return String(d || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase(); }
+
+function makeKey() {
+  if (!window.crypto || !crypto.subtle) { $('warn').textContent = 'This phone browser cannot make keys. Please update your phone.'; return Promise.resolve(); }
+  return crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']).then(function (kp) {
+    return crypto.subtle.exportKey('jwk', kp.privateKey);
+  }).then(function (jwk) {
+    state.privHex = b64uToHex(jwk.d);
+    state.pubHex = '04' + b64uToHex(jwk.x) + b64uToHex(jwk.y);
+    persist();
+  });
+}
+function newKey() {
+  if (!confirm('Make a new key? You will need to host it and add it to your car again.')) return;
+  makeKey().then(render);
+}
+function signOut() { state.signOut = true; state.code = ''; state.current.signedIn = false; persist(); render(); }
+
+function readForm() {
+  var f = {};
+  ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit'].forEach(function (k) { f[k] = $(k).value; });
+  f.domain = cleanDomain(f.domain);
+  return f;
+}
+function persist() {
+  var saved = { current: state.current, privHex: state.privHex, pubHex: state.pubHex, code: state.code,
+    signOut: state.signOut, returnTo: state.returnTo, form: document.readyState !== 'loading' ? readForm() : null };
+  try { localStorage.setItem('tr_setup', JSON.stringify(saved)); } catch (e) {}
+}
+function restore() { try { return JSON.parse(localStorage.getItem('tr_setup') || 'null'); } catch (e) { return null; } }
+
+function render() {
+  var c = state.current, pub = state.pubHex || c.pubHex;
+  $('pem').value = pemFromPub(pub);
+  var d = cleanDomain($('domain').value);
+  $('pairLink').textContent = 'tesla.com/_ak/' + (d || '…');
+  $('pairBtn').href = d ? 'https://tesla.com/_ak/' + d : '#';
+  $('redirect').textContent = REDIRECT;
+  var signedIn = !!(state.code || (c.signedIn && !state.signOut));
+  var pills = [];
+  pills.push(pub ? ['Key ready', 'ok'] : ['No key', 'err']);
+  pills.push(d ? ['Key hosted', 'ok'] : ['Key not hosted', '']);
+  pills.push(signedIn ? [state.code ? 'Signed in (save to finish)' : 'Signed in', 'ok'] : ['Not signed in', '']);
+  if (c.vehicles && c.vehicles.length) pills.push([c.vehicles.length + ' car' + (c.vehicles.length > 1 ? 's' : ''), 'ok']);
+  $('status').innerHTML = pills.map(function (p) { return '<span class="pill ' + p[1] + '">' + p[0] + '</span>'; }).join('');
+  var warn = '';
+  if (c.registerError) warn = 'Tesla registration problem: ' + c.registerError + '. Check the key address and allowed origin, then sign in again.';
+  if (c.bigint === false) warn = 'Your Pebble phone app is too old to sign car commands. Please update it.';
+  $('warn').textContent = warn;
+  $('s1').className = 'card' + (pub ? ' done' : '');
+  $('s2').className = 'card' + (d ? ' done' : '');
+  $('s3').className = 'card' + ($('clientId').value ? ' done' : '');
+  $('s4').className = 'card' + (signedIn ? ' done' : '');
+  $('signinNote').textContent = state.code ? 'Signed in. Tap "Save to watch" to finish.' : '';
+  $('clientSecret').placeholder = c.hasSecret ? 'Saved (leave blank to keep)' : '';
+  if (c.vehicles && c.vehicles.length) {
+    $('carRow').style.display = '';
+    $('vin').innerHTML = c.vehicles.map(function (v) { return '<option value="' + v.vin + '">' + (v.name || v.vin) + '</option>'; }).join('');
+    $('vin').value = c.vin || c.vehicles[0].vin;
+  }
+}
+
+function signIn() {
+  var f = readForm();
+  if (!f.clientId) { alert('Enter your Client ID first (step 3).'); return; }
+  if (!f.clientSecret && !state.current.hasSecret) { alert('Enter your Client secret first (step 3).'); return; }
+  if (!f.domain) { alert('Enter your key address first (step 2).'); return; }
+  var nonce = Math.random().toString(36).slice(2);
+  state.signOut = false;
+  persist();
+  localStorage.setItem('tr_oauth_state', nonce);
+  location.href = 'https://auth.tesla.com/oauth2/v3/authorize?' + [
+    'response_type=code', 'client_id=' + encodeURIComponent(f.clientId), 'redirect_uri=' + encodeURIComponent(REDIRECT),
+    'scope=' + encodeURIComponent(SCOPES), 'state=' + nonce, 'locale=en-US'].join('&');
+}
+
+function save() {
+  var f = readForm();
+  var out = { clientId: f.clientId, domain: f.domain, region: f.region, redirectUri: REDIRECT,
+    carName: f.carName, tempUnit: f.tempUnit, distUnit: f.distUnit };
+  if (f.vin) out.vin = f.vin;
+  if (f.clientSecret) out.clientSecret = f.clientSecret;
+  if (state.privHex) { out.privHex = state.privHex; out.pubHex = state.pubHex; }
+  if (state.code) out.code = state.code;
+  if (state.signOut) out.signOut = true;
+  var ret = state.returnTo || 'pebblejs://close#';
+  try { localStorage.removeItem('tr_setup'); } catch (e) {}
+  location.href = ret + encodeURIComponent(JSON.stringify(out));
+}
+
+(function init() {
+  var q = new URLSearchParams(location.search);
+  var saved = restore();
+  if (q.get('code') && saved) {
+    // Back from Tesla's login page.
+    state = { current: saved.current || {}, privHex: saved.privHex || '', pubHex: saved.pubHex || '', code: '',
+      signOut: false, returnTo: saved.returnTo || '' };
+    if (q.get('state') === localStorage.getItem('tr_oauth_state')) state.code = q.get('code');
+    else $('warn').textContent = 'Sign-in check failed. Please try again.';
+    if (saved.form) Object.keys(saved.form).forEach(function (k) { if ($(k) && saved.form[k] != null) $(k).value = saved.form[k]; });
+    history.replaceState(null, '', REDIRECT);
+  } else if (q.get('error')) {
+    state = saved ? { current: saved.current || {}, privHex: saved.privHex || '', pubHex: saved.pubHex || '', code: '', signOut: false, returnTo: saved.returnTo || '' } : state;
+    if (saved && saved.form) Object.keys(saved.form).forEach(function (k) { if ($(k) && saved.form[k] != null) $(k).value = saved.form[k]; });
+    $('warn').textContent = 'Tesla sign-in was cancelled or failed: ' + (q.get('error_description') || q.get('error'));
+  } else {
+    try { state.current = JSON.parse(decodeURIComponent(location.hash.slice(1)) || '{}'); } catch (e) { state.current = {}; }
+    state.returnTo = q.get('return_to') || '';
+    var c = state.current;
+    $('domain').value = c.domain || '';
+    $('clientId').value = c.clientId || '';
+    $('region').value = c.region || 'na';
+    $('carName').value = c.carName || '';
+    $('tempUnit').value = c.tempUnit || '';
+    $('distUnit').value = c.distUnit || '';
+  }
+  ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit'].forEach(function (k) {
+    $(k).addEventListener('input', function () { persist(); render(); });
+  });
+  if (!state.current.pubHex && !state.pubHex) makeKey().then(render); else render();
+})();
+</script>
+</body>
+</html>
