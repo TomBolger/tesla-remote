@@ -1277,7 +1277,7 @@ static void main_update(Layer *layer, GContext *ctx) {
   int area_bot = rowy - r - (large ? 12 : 9);
   int avail_h = area_bot - area_top;
   int bx = (W - g->w) / 2 - (chg ? g->w / 30 : 0);
-  int by = chg ? area_top : area_top + (avail_h - g->h) / 2;
+  int by = area_top + (avail_h - g->h) / 2;  // centred whether or not it is charging
   graphics_context_set_compositing_mode(ctx, GCompOpAssign);
   graphics_draw_bitmap_in_rect(ctx, bmp_get(0, CAR_RES[am][0][0]), GRect(bx, by, g->w, g->h));
   // moving parts drawn over the closed car: tonneau, then frunk, then trunk/tailgate
