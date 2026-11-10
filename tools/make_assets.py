@@ -61,6 +61,51 @@ def main():
     finish(scale(seat, h=SEAT_H['basalt']), 'basalt').save(os.path.join(OUT, 'seats.png'))
     resources.append({'type': 'bitmap', 'name': 'SEATS', 'file': 'images/car/seats.png'})
 
+    # Control icons (28x28 white glyphs). Colour watches tint them at draw time;
+    # black-and-white watches get a 1-bit white-on-black copy.
+    for name in ('climate', 'seat-heat', 'frunk', 'trunk', 'lock'):
+        src = Image.open(os.path.join(ART, 'icons', name + '.png')).convert('RGBA')
+        a = src.split()[3].point(lambda v: 255 if v > 127 else 0)
+        glyph = Image.new('RGBA', src.size, (255, 255, 255, 0)); glyph.putalpha(a)
+        base = 'icon_' + name.replace('-', '_')
+        glyph.save(os.path.join(OUT, base + '.png'))
+        bw = Image.new('1', src.size, 0); bw.paste(1, mask=a)
+        for plat in BW:
+            bw.save(os.path.join(OUT, '%s~%s.png' % (base, plat)))
+        resources.append({'type': 'bitmap', 'name': base.upper(), 'file': 'images/car/%s.png' % base})
+
+    # Charger cord: 8 frames, 40x56 cells. Black becomes transparent. Scaled like the car.
+    cs = Image.open(os.path.join(ART, 'charger-sprites.png')).convert('RGB')
+    for f in range(8):
+        cell = cs.crop((f * 40, 0, f * 40 + 40, 56)).convert('RGBA')
+        px = cell.load()
+        for y in range(cell.height):
+            for x in range(cell.width):
+                r, g, b, _ = px[x, y]
+                if r + g + b < 40:
+                    px[x, y] = (0, 0, 0, 0)
+        name = 'charge_%d' % f
+        for plat, w in CAR_W.items():
+            k = w / 186.0
+            im = cell.resize((round(40 * k), round(56 * k)), Image.NEAREST) if k != 1 else cell
+            if plat in BW:
+                a = im.split()[3]
+                out = Image.new('1', im.size, 0); out.paste(1, mask=a)
+                out.save(os.path.join(OUT, '%s~%s.png' % (name, plat)))
+            else:
+                q = pebble_color(im.convert('RGB')).convert('RGBA')
+                if k != 1:  # shrunk copies: lift the dark-gray cord so it stays visible
+                    qp = q.load()
+                    for yy in range(q.height):
+                        for xx in range(q.width):
+                            r_, g_, b_, _ = qp[xx, yy]
+                            if r_ == g_ == b_ and 0 < r_ < 170:
+                                qp[xx, yy] = (170, 170, 170, 255)
+                q.putalpha(im.split()[3].point(lambda v: 255 if v > 127 else 0))
+                q.save(os.path.join(OUT, '%s~%s.png' % (name, plat)))
+        Image.open(os.path.join(OUT, '%s~basalt.png' % name)).save(os.path.join(OUT, name + '.png'))
+        resources.append({'type': 'bitmap', 'name': name.upper(), 'file': 'images/car/%s.png' % name})
+
     pkg_path = os.path.join(ROOT, 'package.json')
     pkg = json.load(open(pkg_path))
     media = [m for m in pkg['pebble']['resources']['media'] if not m['file'].startswith('images/car/')]

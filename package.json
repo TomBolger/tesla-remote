@@ -161,6 +161,71 @@
           "type": "bitmap",
           "name": "SEATS",
           "file": "images/car/seats.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "ICON_CLIMATE",
+          "file": "images/car/icon_climate.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "ICON_SEAT_HEAT",
+          "file": "images/car/icon_seat_heat.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "ICON_FRUNK",
+          "file": "images/car/icon_frunk.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "ICON_TRUNK",
+          "file": "images/car/icon_trunk.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "ICON_LOCK",
+          "file": "images/car/icon_lock.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CHARGE_0",
+          "file": "images/car/charge_0.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CHARGE_1",
+          "file": "images/car/charge_1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CHARGE_2",
+          "file": "images/car/charge_2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CHARGE_3",
+          "file": "images/car/charge_3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CHARGE_4",
+          "file": "images/car/charge_4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CHARGE_5",
+          "file": "images/car/charge_5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CHARGE_6",
+          "file": "images/car/charge_6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CHARGE_7",
+          "file": "images/car/charge_7.png"
         }
       ]
     }

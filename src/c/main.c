@@ -1,6 +1,17 @@
 // Tesla Remote - watch side. Tesla-style dark UI with blue accents.
 #include <pebble.h>
 
+// Touch screens: Pebble Time 2 (emery) and Round 2 (gabbro). Other watches are button-only.
+#if !defined(PBL_PLATFORM_BASALT) && !defined(PBL_PLATFORM_CHALK) && !defined(PBL_PLATFORM_DIORITE) && !defined(PBL_PLATFORM_APLITE)
+#define HAS_TOUCH 1
+#endif
+#ifdef HAS_TOUCH
+static void attach_touch(Window *w, RecognizerEventCb tap, bool back);
+static void climate_tap(const Recognizer *rec, RecognizerEvent e);
+static void seat_tap(const Recognizer *rec, RecognizerEvent e);
+static void confirm_tap(const Recognizer *rec, RecognizerEvent e);
+#endif
+
 // ---------------- protocol (matches src/pkjs/index.js) ----------------
 enum { T_STATUS = 1, T_CMD = 2, T_RESULT = 3, T_REFRESH = 4, T_PROGRESS = 5, T_SETTING = 6 };
 enum { C_LOCK = 1, C_UNLOCK, C_FRUNK, C_TRUNK, C_CLIMATE_ON, C_CLIMATE_OFF, C_SET_TEMP,
@@ -120,14 +131,14 @@ static AppTimer *s_pulse_timer;
 static bool s_pulse;
 static int s_phase;
 static void pulse_tick(void *ctx) {
-  s_phase = (s_phase + 1) % 12;
-  s_pulse = (s_phase / 3) % 2;
+  s_phase = (s_phase + 1) % 8;
+  s_pulse = s_phase >= 4;
   if (s_main_layer) layer_mark_dirty(s_main_layer);
-  s_pulse_timer = (s.charging == 2 && s.has_data) ? app_timer_register(250, pulse_tick, NULL) : NULL;
+  s_pulse_timer = (s.charging == 2 && s.has_data) ? app_timer_register(140, pulse_tick, NULL) : NULL;
 }
 static void anim_kick(void);
 static void pulse_update(void) {
-  if (s.charging == 2 && s.has_data && !s_pulse_timer) s_pulse_timer = app_timer_register(250, pulse_tick, NULL);
+  if (s.charging == 2 && s.has_data && !s_pulse_timer) s_pulse_timer = app_timer_register(140, pulse_tick, NULL);
 }
 
 static void inbox(DictionaryIterator *it, void *ctx) {
@@ -262,8 +273,8 @@ static const uint32_t TRUNK_RES[8] = { RESOURCE_ID_TRUNK_0, RESOURCE_ID_TRUNK_1,
   RESOURCE_ID_TRUNK_4, RESOURCE_ID_TRUNK_5, RESOURCE_ID_TRUNK_6, RESOURCE_ID_TRUNK_7 };
 static const uint32_t FRUNK_RES[8] = { RESOURCE_ID_FRUNK_0, RESOURCE_ID_FRUNK_1, RESOURCE_ID_FRUNK_2, RESOURCE_ID_FRUNK_3,
   RESOURCE_ID_FRUNK_4, RESOURCE_ID_FRUNK_5, RESOURCE_ID_FRUNK_6, RESOURCE_ID_FRUNK_7 };
-static GBitmap *s_bmp[2];
-static uint32_t s_bmp_id[2];
+static GBitmap *s_bmp[3];
+static uint32_t s_bmp_id[3];
 static GBitmap *bmp_get(int slot, uint32_t id) {
   if (s_bmp[slot] && s_bmp_id[slot] == id) return s_bmp[slot];
   if (s_bmp[slot]) gbitmap_destroy(s_bmp[slot]);
@@ -272,6 +283,41 @@ static GBitmap *bmp_get(int slot, uint32_t id) {
   return s_bmp[slot];
 }
 static bool use_sprites(void) { return s.model == 0 || s.model == 2; }
+static const uint32_t CHARGE_RES[8] = { RESOURCE_ID_CHARGE_0, RESOURCE_ID_CHARGE_1, RESOURCE_ID_CHARGE_2, RESOURCE_ID_CHARGE_3,
+  RESOURCE_ID_CHARGE_4, RESOURCE_ID_CHARGE_5, RESOURCE_ID_CHARGE_6, RESOURCE_ID_CHARGE_7 };
+// Draw the charger cord with its plug tip at `port`, clipped so it never runs past `max_y`.
+static void draw_charger(GContext *ctx, GPoint port, int max_y, int phase) {
+  GBitmap *cb = bmp_get(2, CHARGE_RES[phase % 8]);
+  GSize cs = gbitmap_get_bounds(cb).size;
+  int tx = 25 * cs.w / 40, ty = 1 * cs.h / 56;     // plug tip inside the 40x56 frame
+  GRect r = GRect(port.x - tx, port.y - ty, cs.w, cs.h);
+  if (r.origin.y + r.size.h > max_y) r.size.h = max_y - r.origin.y;
+  if (r.size.h <= 0) return;
+  graphics_context_set_compositing_mode(ctx, GCompOpSet);
+  graphics_draw_bitmap_in_rect(ctx, cb, r);
+  graphics_context_set_compositing_mode(ctx, GCompOpAssign);
+}
+
+// Control icons (28x28 glyphs supplied as art). Colour watches recolour the glyph.
+static GBitmap *s_icon[5];
+static void draw_icon(GContext *ctx, int i, GPoint c, GColor col, bool on_light) {
+  GBitmap *b = s_icon[i];
+  if (!b) return;
+  GSize sz = gbitmap_get_bounds(b).size;
+  GRect r = GRect(c.x - sz.w / 2, c.y - sz.h / 2, sz.w, sz.h);
+#ifdef PBL_COLOR
+  GBitmapFormat f = gbitmap_get_format(b);
+  int n = f == GBitmapFormat1BitPalette ? 2 : f == GBitmapFormat2BitPalette ? 4 : f == GBitmapFormat4BitPalette ? 16 : 0;
+  GColor *pal = gbitmap_get_palette(b);
+  for (int k = 0; k < n && pal; k++) if (pal[k].a) pal[k] = (GColor){ .argb = (uint8_t)(col.argb | 0xC0) };
+  graphics_context_set_compositing_mode(ctx, GCompOpSet);
+#else
+  graphics_context_set_compositing_mode(ctx, GCompOpSet);
+#endif
+  graphics_draw_bitmap_in_rect(ctx, b, r);
+  graphics_context_set_compositing_mode(ctx, GCompOpAssign);
+}
+
 
 // Lid animation: frame 0 = closed, 7 = fully open.
 static int s_fr_frame, s_tr_frame;         // what is on screen now
@@ -318,21 +364,6 @@ static void draw_car(GContext *ctx, GRect r, const CarModel *m, bool frunk, bool
   graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
   graphics_fill_circle(ctx, w1, wr * 2 / 10);
   graphics_fill_circle(ctx, w2, wr * 2 / 10);
-  if (charging) {
-    // Cord from the ground up into the charge port; green pulses climb toward the car.
-    GPoint pts[4] = { cp(r, 106, m->h + 1, m->h), cp(r, 104, m->h - 4, m->h), cp(r, 98, m->port[1] + 5, m->h), cp(r, m->port[0], m->port[1], m->h) };
-    graphics_context_set_stroke_width(ctx, 3);
-    for (int i = 0; i < 3; i++) {
-      bool lit = (phase % 3) == i;
-      graphics_context_set_stroke_color(ctx, lit ? PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite) : PBL_IF_COLOR_ELSE(GColorDarkGreen, GColorWhite));
-#ifdef PBL_BW
-      if (!lit && (phase / 3) % 2) continue;
-#endif
-      graphics_draw_line(ctx, pts[i], pts[i + 1]);
-    }
-    graphics_context_set_fill_color(ctx, (phase % 3) == 2 ? PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite) : PBL_IF_COLOR_ELSE(GColorIslamicGreen, GColorWhite));
-    graphics_fill_circle(ctx, pts[3], 2);
-  }
   // dark gap under an open lid, so it reads as open
   graphics_context_set_fill_color(ctx, COL_BG);
   if (frunk) {
@@ -347,77 +378,6 @@ static void draw_car(GContext *ctx, GRect r, const CarModel *m, bool frunk, bool
 
 // ---------------- line-art icons (2px) ----------------
 static void line2(GContext *ctx, GPoint a, GPoint b) { graphics_draw_line(ctx, a, b); }
-static GPoint ip(GPoint c, int x, int y, int s) { return GPoint(c.x + (x - 12) * s / 24, c.y + (y - 6) * s / 24); }
-
-// Small filled car silhouette (24 x 10 grid, facing left) with the frunk or trunk lid raised.
-static void icon_lid(GContext *ctx, GPoint c, int s, bool front, GColor col, GColor bg) {
-  static const int8_t body[8][2] = { {0,11},{0,7},{7,6},{10,2},{16,2},{20,5},{24,6},{24,11} };
-  GPoint p[8];
-  for (int i = 0; i < 8; i++) p[i] = ip(c, body[i][0], body[i][1], s);
-  GPathInfo info = { .num_points = 8, .points = p };
-  GPath *path = gpath_create(&info);
-  graphics_context_set_fill_color(ctx, col);
-  gpath_draw_filled(ctx, path);
-  gpath_destroy(path);
-  // wheels sit in arches at the bottom edge
-  int wr = s / 12 + 1;
-  graphics_context_set_fill_color(ctx, bg);
-  graphics_fill_circle(ctx, ip(c, 5, 11, s), wr + 1);
-  graphics_fill_circle(ctx, ip(c, 19, 11, s), wr + 1);
-  graphics_context_set_fill_color(ctx, col);
-  graphics_fill_circle(ctx, ip(c, 5, 11, s), wr - 1 > 1 ? wr - 1 : 1);
-  graphics_fill_circle(ctx, ip(c, 19, 11, s), wr - 1 > 1 ? wr - 1 : 1);
-  graphics_context_set_stroke_width(ctx, 2);
-  if (front) {
-    // cut away the closed hood, then draw it swung up from the windshield
-    graphics_context_set_stroke_color(ctx, bg);
-    line2(ctx, ip(c, 0, 7, s), ip(c, 7, 6, s));
-    graphics_context_set_stroke_color(ctx, col);
-    line2(ctx, ip(c, 8, 6, s), ip(c, 2, 0, s));
-  } else {
-    graphics_context_set_stroke_color(ctx, bg);
-    line2(ctx, ip(c, 17, 3, s), ip(c, 24, 6, s));
-    graphics_context_set_stroke_color(ctx, col);
-    line2(ctx, ip(c, 16, 3, s), ip(c, 24, -1, s));
-  }
-}
-
-static void icon_lock(GContext *ctx, GPoint c, int s, bool locked, GColor col, GColor bg) {
-  int w = s * 7 / 10, h = s * 5 / 10;
-  GRect body = GRect(c.x - w / 2, c.y - h / 2 + s / 6, w, h);
-  graphics_context_set_stroke_color(ctx, col);
-  graphics_context_set_stroke_width(ctx, 2);
-  int sw = w * 6 / 10, sh = s * 6 / 10;
-  GRect shackle = GRect(c.x - sw / 2, body.origin.y - sh / 2 - (locked ? 0 : s / 6), sw, sh);
-  graphics_draw_round_rect(ctx, shackle, sw / 2);
-  if (!locked) {
-    graphics_context_set_fill_color(ctx, bg);
-    graphics_fill_rect(ctx, GRect(shackle.origin.x + sw - 2, body.origin.y - s / 5, 4, s / 5), 0, GCornerNone);
-  }
-  graphics_context_set_fill_color(ctx, col);
-  graphics_fill_rect(ctx, body, 2, GCornersAll);
-  graphics_context_set_fill_color(ctx, bg);
-  graphics_fill_rect(ctx, GRect(c.x - 1, body.origin.y + h / 2 - 2, 2, 4), 0, GCornerNone);
-}
-
-static GPoint polar(GPoint c, int32_t a, int d) {
-  return GPoint(c.x + sin_lookup(a) * d / TRIG_MAX_RATIO, c.y - cos_lookup(a) * d / TRIG_MAX_RATIO);
-}
-static void icon_fan(GContext *ctx, GPoint c, int s, GColor col) {
-  int R = s / 2;
-  graphics_context_set_fill_color(ctx, col);
-  int32_t deg = TRIG_MAX_ANGLE / 360;
-  for (int i = 0; i < 3; i++) {
-    int32_t a = i * TRIG_MAX_ANGLE / 3;
-    GPoint pts[5] = { polar(c, a - 25 * deg, 2), polar(c, a - 12 * deg, R), polar(c, a + 18 * deg, R + 1),
-                      polar(c, a + 50 * deg, R * 2 / 3), polar(c, a + 40 * deg, 2) };
-    GPathInfo info = { .num_points = 5, .points = pts };
-    GPath *p = gpath_create(&info);
-    gpath_draw_filled(ctx, p);
-    gpath_destroy(p);
-  }
-  graphics_fill_circle(ctx, c, 2);
-}
 
 // Heat waves: n wavy lines (2px), like Tesla's seat-heat symbol.
 static void icon_heat(GContext *ctx, GPoint c, int s, int n, GColor col) {
@@ -557,6 +517,9 @@ static void confirm_load(Window *w) {
   s_confirm_layer = layer_create(layer_get_bounds(root));
   layer_set_update_proc(s_confirm_layer, confirm_update);
   layer_add_child(root, s_confirm_layer);
+#ifdef HAS_TOUCH
+  attach_touch(w, confirm_tap, true);
+#endif
 }
 static void confirm_unload(Window *w) { layer_destroy(s_confirm_layer); window_destroy(w); s_confirm_win = NULL; }
 static void confirm(const char *text, int cmd, const char *progress) {
@@ -582,6 +545,10 @@ static void set_split(bool on) {
 static Window *s_climate_win;
 static int s_pend[2] = { NO_TEMP, NO_TEMP };  // pending driver / passenger temps (c10)
 static int s_side;                             // 0 driver, 1 passenger (split mode)
+#ifdef HAS_TOUCH
+static GRect s_cl_pill, s_cl_chip[2], s_cl_hint;
+static int s_cl_tcy, s_cl_areaw;
+#endif
 
 static int shown_temp(int side) {
   if (s_pend[side] != NO_TEMP) return s_pend[side];
@@ -622,8 +589,16 @@ static void climate_update(Layer *layer, GContext *ctx) {
   int pw = 42, ph = 18;
   GRect pill = round ? GRect((W - pw) / 2, ty + 20, pw, ph) : GRect(areaw - pw - 6, ty + 1, pw, ph);
   chip(ctx, pill, s.climate ? "ON" : "OFF", s.climate);
+#ifdef HAS_TOUCH
+  s_cl_pill = pill; s_cl_areaw = areaw;
+  s_cl_chip[0] = s_cl_chip[1] = GRect(0, 0, 0, 0);
+#endif
 
   int tcy = round ? H * 47 / 100 : H * 44 / 100;
+#ifdef HAS_TOUCH
+  s_cl_tcy = tcy;
+  s_cl_hint = GRect(0, tcy + 44, W, 26);
+#endif
   char t[12];
   bool pend = pending();
   if (!s.split) {
@@ -661,8 +636,12 @@ static void climate_update(Layer *layer, GContext *ctx) {
   int chy = iy + 22;
   if (chy + 18 <= H - (round ? H / 7 : 2)) {
     int cw = round ? W / 3 : (areaw - 14) / 2;
-    chip(ctx, GRect(round ? W / 2 - cw - 2 : 5, chy, cw, 18), "Defrost", s.defrost);
-    chip(ctx, GRect(round ? W / 2 + 2 : 9 + cw, chy, cw, 18), "Vent", s.windows);
+    GRect c1 = GRect(round ? W / 2 - cw - 2 : 5, chy, cw, 18), c2 = GRect(round ? W / 2 + 2 : 9 + cw, chy, cw, 18);
+    chip(ctx, c1, "Defrost", s.defrost);
+    chip(ctx, c2, "Vent", s.windows);
+#ifdef HAS_TOUCH
+    s_cl_chip[0] = c1; s_cl_chip[1] = c2;
+#endif
   }
   // button hints on the right edge
   if (!round) {
@@ -764,6 +743,9 @@ static void climate_load(Window *w) {
   s_climate_layer = layer_create(layer_get_bounds(root));
   layer_set_update_proc(s_climate_layer, climate_update);
   layer_add_child(root, s_climate_layer);
+#ifdef HAS_TOUCH
+  attach_touch(w, climate_tap, true);
+#endif
 }
 static void climate_unload(Window *w) {
   s_pend[0] = s_pend[1] = NO_TEMP;  // leaving without pressing Select sends nothing
@@ -812,6 +794,9 @@ static const int16_t SEAT_BOX[I_COUNT][4] = {
   { 65, 42, 68, 9 }, { 74, 185, 52, 13 },               // windshield, rear window
 };
 static GBitmap *s_seat_bmp;
+#ifdef HAS_TOUCH
+static GRect s_seat_hit[I_COUNT];
+#endif
 
 static void seat_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
@@ -852,6 +837,9 @@ static void seat_update(Layer *layer, GContext *ctx) {
       graphics_context_set_stroke_width(ctx, 2);
       graphics_draw_round_rect(ctx, grect_inset(r, GEdgeInsets(-2)), 4);
     }
+#ifdef HAS_TOUCH
+    s_seat_hit[i] = r;
+#endif
   }
 
   // label
@@ -907,6 +895,9 @@ static void seat_load(Window *w) {
   s_seat_layer = layer_create(layer_get_bounds(root));
   layer_set_update_proc(s_seat_layer, seat_update);
   layer_add_child(root, s_seat_layer);
+#ifdef HAS_TOUCH
+  attach_touch(w, seat_tap, true);
+#endif
 }
 static void seat_unload(Window *w) {
   layer_destroy(s_seat_layer); s_seat_layer = NULL;
@@ -997,27 +988,36 @@ static void button_label(int b, char *buf, size_t n) {
   }
 }
 
-static void draw_button(GContext *ctx, GPoint c, int r, int b, bool sel) {
+static void draw_button(GContext *ctx, GPoint c, int r, int b, bool sel, bool plates) {
   bool active = button_active(b);
   GColor bg = sel ? COL_FILL : COL_CARD;
   GColor fg = sel ? COL_ON_FILL : (active ? COL_ACCENT : COL_TEXT);
-  graphics_context_set_fill_color(ctx, bg);
-  graphics_fill_circle(ctx, c, r);
-#ifdef PBL_BW
-  if (!sel) { graphics_context_set_stroke_color(ctx, GColorWhite); graphics_context_set_stroke_width(ctx, 1); graphics_draw_circle(ctx, c, r); }
-#endif
-  switch (b) {
-    case B_CLIMATE: icon_fan(ctx, c, r + 7, fg); break;
-    case B_SEAT: icon_heat(ctx, c, r + 3, 3, fg); break;
-    case B_FRUNK: icon_lid(ctx, GPoint(c.x, c.y + 2), r * 19 / 10, true, fg, bg); break;
-    case B_TRUNK: icon_lid(ctx, GPoint(c.x, c.y + 2), r * 19 / 10, false, fg, bg); break;
-    default: icon_lock(ctx, c, r + 4, s.locked || !s.has_data, fg, bg); break;
+#ifdef PBL_COLOR
+  if (sel || plates) {
+    graphics_context_set_fill_color(ctx, bg);
+    graphics_fill_circle(ctx, c, r);
   }
+#endif
+  // icon order in s_icon matches the button order
+  draw_icon(ctx, b, c, fg, false);
+#ifdef PBL_BW
+  // black & white: ring drawn after the icon so the icon's black box can't cover it
+  graphics_context_set_stroke_color(ctx, GColorWhite);
+  graphics_context_set_stroke_width(ctx, 1);
+  if (sel || plates) graphics_draw_circle(ctx, c, r - 1);
+  if (sel) { graphics_draw_circle(ctx, c, r); graphics_draw_circle(ctx, c, r - 2); }
+#endif
   if (active && !sel) {
     graphics_context_set_fill_color(ctx, COL_ACCENT);
     graphics_fill_circle(ctx, GPoint(c.x, c.y + r + 4), 2);
   }
 }
+
+#ifdef HAS_TOUCH
+static GPoint s_btn_c[5];
+static int s_btn_r;
+static int s_top_bottom;  // y below which the status rows end
+#endif
 
 static void main_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
@@ -1070,13 +1070,20 @@ static void main_update(Layer *layer, GContext *ctx) {
   text_at(ctx, line, f14b, GRect(round ? W / 6 : 2, row2, round ? W * 2 / 3 : W - 4, 18), GTextAlignmentCenter, state_color());
 
   // --- control row ---
-  int r = large ? 17 : 13;
+  bool plates = large;  // gray circles behind every icon only where there is room
+  int r = large ? 18 : 15;
   int rowy = round ? H * 73 / 100 : H - (large ? 58 : 44);
-  int span = round ? W * 72 / 100 : W - 2 * (r + 3);
+  int span = round ? W * 74 / 100 : W - 2 * (r + 1);
   for (int i = 0; i < B_COUNT; i++) {
     int cx = (W - span) / 2 + span * i / (B_COUNT - 1);
-    draw_button(ctx, GPoint(cx, rowy), r, i, i == s_sel);
+    draw_button(ctx, GPoint(cx, rowy), r, i, i == s_sel, plates);
+#ifdef HAS_TOUCH
+    s_btn_c[i] = GPoint(cx, rowy); s_btn_r = r;
+#endif
   }
+#ifdef HAS_TOUCH
+  s_top_bottom = row2 + 18;
+#endif
   char lbl[32];
   button_label(s_sel, lbl, sizeof(lbl));
   if (s.car_state == S_SETUP || s.car_state == S_PAIR || s.car_state == S_ERROR) { if (s.text[0]) snprintf(lbl, sizeof(lbl), "%s", s.text); }
@@ -1092,11 +1099,11 @@ static void main_update(Layer *layer, GContext *ctx) {
   int lid_room = 8;  // space for a raised lid above the roof
   if (cw * m->h / 100 + lid_room > avail_h) cw = (avail_h - lid_room) * 100 / m->h;
   int ch = cw * m->h / 100;
-  int cy = area_top + lid_room + (avail_h - lid_room - ch) / 2;
+  int cy = chg ? area_top + lid_room : area_top + lid_room + (avail_h - lid_room - ch) / 2;
   if (use_sprites()) {
     GBitmap *base = bmp_get(0, s_fr_frame ? FRUNK_RES[s_fr_frame] : TRUNK_RES[s_tr_frame]);
     GSize bs = gbitmap_get_bounds(base).size;
-    int bx = (W - bs.w) / 2 - (chg ? bs.w / 30 : 0), by = area_top + (avail_h - bs.h) / 2;
+    int bx = (W - bs.w) / 2 - (chg ? bs.w / 30 : 0), by = chg ? area_top : area_top + (avail_h - bs.h) / 2;
     graphics_context_set_compositing_mode(ctx, GCompOpAssign);
     graphics_draw_bitmap_in_rect(ctx, base, GRect(bx, by, bs.w, bs.h));
     if (s_fr_frame && s_tr_frame) {
@@ -1107,25 +1114,11 @@ static void main_update(Layer *layer, GContext *ctx) {
       graphics_draw_bitmap_in_rect(ctx, half, GRect(bx + x0, by, bs.w - x0, bs.h));
       gbitmap_destroy(half);
     }
-    if (chg) {
-      // cord from the ground into the charge port in the left tail light
-      int k = bs.w;
-      GPoint pts[4] = { GPoint(bx + 192 * k / 186, by + bs.h + 2), GPoint(bx + 187 * k / 186, by + 60 * k / 186),
-                        GPoint(bx + 178 * k / 186, by + 47 * k / 186), GPoint(bx + 171 * k / 186, by + 41 * k / 186) };
-      graphics_context_set_stroke_width(ctx, 3);
-      for (int i = 0; i < 3; i++) {
-        bool lit = (s_phase % 3) == i;
-#ifdef PBL_BW
-        if (!lit && (s_phase / 3) % 2) continue;
-#endif
-        graphics_context_set_stroke_color(ctx, lit ? PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite) : PBL_IF_COLOR_ELSE(GColorDarkGreen, GColorWhite));
-        graphics_draw_line(ctx, pts[i], pts[i + 1]);
-      }
-      graphics_context_set_fill_color(ctx, (s_phase % 3) == 2 ? PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite) : PBL_IF_COLOR_ELSE(GColorIslamicGreen, GColorWhite));
-      graphics_fill_circle(ctx, pts[3], 2);
-    }
+    if (chg) draw_charger(ctx, GPoint(bx + 171 * bs.w / 186, by + 41 * bs.w / 186), rowy - r - 3, s_phase);
   } else {
-    draw_car(ctx, GRect((W - cw) / 2 - (chg ? cw / 22 : 0), cy, cw, ch), m, s.frunk && s.has_data, s.trunk && s.has_data, chg, s_phase);
+    GRect cr = GRect((W - cw) / 2 - (chg ? cw / 22 : 0), cy, cw, ch);
+    draw_car(ctx, cr, m, s.frunk && s.has_data, s.trunk && s.has_data, chg, s_phase);
+    if (chg) draw_charger(ctx, cp(cr, m->port[0], m->port[1], m->h), rowy - r - 3, s_phase);
   }
 
   draw_toast(ctx, b);
@@ -1150,6 +1143,68 @@ static void m_select(ClickRecognizerRef r, void *c) {
 static void m_long(ClickRecognizerRef r, void *c) {
   open_menu((MenuSpec){ .title = "More", .rows = 5, .row_title = more_title, .row_sub = more_sub, .pick = more_pick });
 }
+
+// ---------------- touch (Pebble Time 2 / Round 2) ----------------
+#ifdef HAS_TOUCH
+static bool in_rect(GPoint p, GRect r, int pad) {
+  return p.x >= r.origin.x - pad && p.x < r.origin.x + r.size.w + pad && p.y >= r.origin.y - pad && p.y < r.origin.y + r.size.h + pad;
+}
+static void back_swipe(const Recognizer *rec, RecognizerEvent e) {
+  if (e == RecognizerEvent_Completed && swipe_recognizer_get_direction(rec) == SwipeDirection_Right)
+    window_stack_pop(true);
+}
+static void attach_touch(Window *w, RecognizerEventCb tap, bool back) {
+  window_set_touch_bridge_disabled(w, true);
+  window_attach_recognizer(w, tap_recognizer_create(tap, NULL));
+  if (back) window_attach_recognizer(w, swipe_recognizer_create(back_swipe, NULL, SwipeDirection_Right));
+}
+
+static void main_tap(const Recognizer *rec, RecognizerEvent e) {
+  if (e != RecognizerEvent_Completed) return;
+  GPoint p = tap_recognizer_get_tap_point(rec);
+  for (int i = 0; i < B_COUNT; i++) {
+    int dx = p.x - s_btn_c[i].x, dy = p.y - s_btn_c[i].y, rr = s_btn_r + 6;
+    if (dx * dx + dy * dy <= rr * rr) { s_sel = i; redraw(); m_select(NULL, NULL); return; }
+  }
+  if (p.y < s_top_bottom) send_refresh(false);
+}
+static void main_swipe(const Recognizer *rec, RecognizerEvent e) {
+  if (e == RecognizerEvent_Completed && swipe_recognizer_get_direction(rec) == SwipeDirection_Up) m_long(NULL, NULL);
+}
+
+static void climate_tap(const Recognizer *rec, RecognizerEvent e) {
+  if (e != RecognizerEvent_Completed) return;
+  GPoint p = tap_recognizer_get_tap_point(rec);
+  if (in_rect(p, s_cl_pill, 6)) {
+    if (s.climate) send_cmd(C_CLIMATE_OFF, 0, "Climate off"); else send_cmd(C_CLIMATE_ON, 0, "Climate on");
+    return;
+  }
+  if (in_rect(p, s_cl_chip[0], 4)) { copt_pick(1); return; }
+  if (in_rect(p, s_cl_chip[1], 4)) { copt_pick(2); return; }
+  if (pending() && in_rect(p, s_cl_hint, 0)) { apply_temps(); return; }
+  if (p.y < s_cl_tcy - 60 || p.y > s_cl_tcy + 50) return;
+  if (s.split) { int sd = p.x < s_cl_areaw / 2 ? 0 : 1; if (sd != s_side) { s_side = sd; redraw(); } }
+  if (p.y < s_cl_tcy - 12) temp_step(+1);
+  else if (p.y > s_cl_tcy + 16) temp_step(-1);
+  else if (pending()) apply_temps();
+}
+
+static void seat_tap(const Recognizer *rec, RecognizerEvent e) {
+  if (e != RecognizerEvent_Completed) return;
+  GPoint p = tap_recognizer_get_tap_point(rec);
+  for (int i = 0; i < I_COUNT; i++) {
+    if (item_visible(i) && in_rect(p, s_seat_hit[i], 3)) { s_item = i; redraw(); seat_select(NULL, NULL); return; }
+  }
+}
+
+static void confirm_tap(const Recognizer *rec, RecognizerEvent e) {
+  if (e != RecognizerEvent_Completed) return;
+  GPoint p = tap_recognizer_get_tap_point(rec);
+  GRect b = layer_get_bounds(window_get_root_layer(s_confirm_win));
+  if (p.x > b.size.w * 2 / 3 || (p.y > b.size.h / 2 - 50 && p.y < b.size.h / 2 + 20)) confirm_select(NULL, NULL);
+}
+#endif
+
 static void main_clicks(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_UP, m_up);
   window_single_click_subscribe(BUTTON_ID_DOWN, m_down);
@@ -1161,6 +1216,10 @@ static void main_load(Window *w) {
   s_main_layer = layer_create(layer_get_bounds(root));
   layer_set_update_proc(s_main_layer, main_update);
   layer_add_child(root, s_main_layer);
+#ifdef HAS_TOUCH
+  attach_touch(w, main_tap, false);
+  window_attach_recognizer(w, swipe_recognizer_create(main_swipe, NULL, SwipeDirection_Up));
+#endif
 }
 static void main_unload(Window *w) { layer_destroy(s_main_layer); s_main_layer = NULL; }
 
@@ -1191,6 +1250,11 @@ static void init(void) {
   f28b = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
   f_big = fonts_get_system_font(FONT_KEY_BITHAM_42_LIGHT);
   load_status();
+  static const uint32_t icons[5] = { RESOURCE_ID_ICON_CLIMATE, RESOURCE_ID_ICON_SEAT_HEAT, RESOURCE_ID_ICON_FRUNK, RESOURCE_ID_ICON_TRUNK, RESOURCE_ID_ICON_LOCK };
+  for (int i = 0; i < 5; i++) s_icon[i] = gbitmap_create_with_resource(icons[i]);
+#ifdef HAS_TOUCH
+  app_touch_navigation_enable(true);  // lets the built-in menus scroll and select by touch
+#endif
   app_message_register_inbox_received(inbox);
   app_message_open(1024, 64);
 
