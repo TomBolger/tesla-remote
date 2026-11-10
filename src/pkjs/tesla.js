@@ -195,7 +195,7 @@ function vehicleState(cb) {
 }
 function vehicleData(cb) {
   if (!vin()) return cb(err('setup', 'Set up on phone'));
-  var parts = 'charge_state;climate_state;vehicle_state;vehicle_config;gui_settings';
+  var parts = 'charge_state;climate_state;drive_state;vehicle_state;vehicle_config;gui_settings';
   var withLoc = !cfg().noLocation;
   api('GET', '/api/1/vehicles/' + vin() + '/vehicle_data?endpoints=' + encodeURIComponent(parts + (withLoc ? ';location_data' : '')),
     null, function (e, j) {

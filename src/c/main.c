@@ -21,13 +21,14 @@ enum { C_LOCK = 1, C_UNLOCK, C_FRUNK, C_TRUNK, C_CLIMATE_ON, C_CLIMATE_OFF, C_SE
 enum { S_UNKNOWN = 0, S_ONLINE, S_ASLEEP, S_OFFLINE, S_ERROR, S_SETUP, S_PAIR, S_BUSY };
 #define NO_TEMP (-1000)
 #define PERSIST_STATUS 1
-#define STATUS_VERSION 4
+#define STATUS_VERSION 5
 
 typedef struct {
   uint8_t version;
   int8_t car_state;
   bool has_data, locked, frunk, trunk, climate, defrost, rear_defrost, wheel, windows, split, can_cool, has_rear, has_rear_c;
-  uint8_t battery, charging, charge_limit, units, model;
+  uint8_t battery, charging, charge_limit, units, model, shift;
+  int16_t speed;
   uint8_t seat[5];   // heat 0-3: driver, passenger, rear left, rear centre, rear right
   uint8_t cool[2];   // cooling 0-3: driver, passenger
   int16_t range, min_to_full, in_temp, out_temp, set_temp, pass_temp, bearing;
@@ -182,6 +183,8 @@ static void inbox(DictionaryIterator *it, void *ctx) {
       s.units = tint(it, MESSAGE_KEY_Units, s.units);
       s.model = tint(it, MESSAGE_KEY_Model, s.model);
       s.dist = tint(it, MESSAGE_KEY_Dist, s.dist);
+      s.shift = tint(it, MESSAGE_KEY_Shift, 0);
+      s.speed = tint(it, MESSAGE_KEY_Speed, 0);
       s.bearing = tint(it, MESSAGE_KEY_Bearing, s.bearing);
       s.updated = time(NULL) - tint(it, MESSAGE_KEY_Age, 0);
     }
@@ -1078,7 +1081,12 @@ static int s_sel = B_CLIMATE;
 
 static const char *state_label(void) {
   switch (s.car_state) {
-    case S_ONLINE: return s.charging == 2 ? "Charging" : "Parked";
+    case S_ONLINE: {
+      static char drive[24];
+      if (s.shift == 1 || s.shift == 3) { snprintf(drive, sizeof(drive), "Driving %d %s", s.speed, is_mi() ? "mph" : "km/h"); return drive; }
+      if (s.shift == 2) return "Reversing";
+      return s.charging == 2 ? "Charging" : "Parked";
+    }
     case S_ASLEEP: return "Asleep";
     case S_OFFLINE: return "Offline";
     case S_SETUP: return "Set up on phone";
@@ -1251,6 +1259,7 @@ static void main_update(Layer *layer, GContext *ctx) {
   // --- second row: inside temperature under the battery; status + distance on the right ---
   char line[48], dist[20];
   fmt_dist(dist, sizeof(dist));
+  if (s.car_state == S_ONLINE && s.shift) dist[0] = 0;
   const char *st = state_label();
   if (s.car_state == S_ASLEEP && s.updated) {
     int mins = (time(NULL) - s.updated) / 60;

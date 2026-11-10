@@ -121,6 +121,6 @@ def main():
                               'tpms_pressure_fl': 2.9, 'tpms_pressure_fr': 2.9, 'tpms_pressure_rl': 2.85, 'tpms_pressure_rr': 2.9,
                               'car_version': '2026.38.4 abc', 'software_update': {'status': 'available', 'version': '2026.44'},
                               'df': 0, 'pf': 0, 'dr': 0, 'pr': 1, 'fd_window': 0, 'fp_window': 0, 'rd_window': 0, 'rp_window': 0, 'is_user_present': False},
-            'vehicle_config': {'car_type': 'model3'}, 'gui_settings': {'gui_temperature_units': 'F', 'gui_distance_units': 'mi/hr'}}})
+            'drive_state': {'shift_state': 'D', 'speed': 45}, 'vehicle_config': {'car_type': 'model3'}, 'gui_settings': {'gui_temperature_units': 'F', 'gui_distance_units': 'mi/hr'}}})
     save(); out(404, {'error': 'not found ' + path})
 main()

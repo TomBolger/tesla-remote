@@ -71,7 +71,9 @@
       "HasRearC",
       "MenuPage",
       "MenuTitle",
-      "MenuRows"
+      "MenuRows",
+      "Shift",
+      "Speed"
     ],
     "resources": {
       "media": [

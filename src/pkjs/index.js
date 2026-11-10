@@ -121,6 +121,9 @@ function statusMsg(d, at, carState, text) {
     Age: at ? Math.max(0, Math.round((Date.now() - at) / 1000)) : 0,
     CarName: String(cfg.carName || vs.vehicle_name || d.display_name || 'Tesla').slice(0, 24),
     Split: cfg.split ? 1 : 0,
+    // gear: 0 parked/unknown, 1 drive, 2 reverse, 3 neutral; speed in the user's units
+    Shift: ({ D: 1, R: 2, N: 3 })[(d.drive_state || {}).shift_state] || 0,
+    Speed: Math.round(((d.drive_state || {}).speed || 0) * (units & 2 ? 1 : 1.609344)),
     Dist: vec.dist,
     Bearing: vec.bearing
   };
