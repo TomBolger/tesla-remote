@@ -106,9 +106,20 @@
 
 <div class="card" id="s4">
   <h2><span class="num">4</span>Sign in with Tesla</h2>
-  <p>This one happens right here. You'll log in on Tesla's own page and come straight back. Your password never touches this app.</p>
-  <button class="btn" id="signin" onclick="signIn()">Sign in with Tesla</button>
+  <p>Tesla's login doesn't work inside the Pebble window, so you'll use your normal browser:</p>
+  <p>1. Tap <b>Copy sign-in link</b>.<br>2. Paste it into Safari or Chrome and log in to Tesla.<br>3. You'll land on a page showing your <b>sign-in code</b>. Tap <b>Copy code</b>.<br>4. Come back here, paste it below, and tap <b>Save to watch</b> straight away (codes expire after a few minutes).</p>
+  <button class="btn" id="signin" onclick="copySignIn(this)">Copy sign-in link</button>
+  <label for="authCode">Sign-in code</label>
+  <input id="authCode" placeholder="Paste your sign-in code here" autocapitalize="off" autocorrect="off" spellcheck="false">
   <div class="hint" id="signinHint"></div>
+  <p style="margin-top:12px;font-size:13px"><a href="#" onclick="signInHere(); return false;">Or try signing in inside this window</a> (works with some Pebble apps).</p>
+</div>
+
+<div class="card" id="codeView" style="display:none">
+  <h2><span class="num" style="background:var(--blue)">✓</span>Signed in to Tesla</h2>
+  <p>Your sign-in code:</p>
+  <div class="copy"><code id="codeText"></code><button onclick="copyText($('codeText').textContent, this)">Copy code</button></div>
+  <p style="margin-top:12px">Now go back to the <b>Pebble app</b>, open <b>Tesla Remote</b> settings, paste this into <b>step 4</b>, and tap <b>Save to watch</b>. The code expires in a few minutes.</p>
 </div>
 
 <div class="card" id="s5">
@@ -146,7 +157,7 @@
 var $ = function (id) { return document.getElementById(id); };
 var REDIRECT = location.origin + location.pathname;
 var SCOPES = 'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds';
-var FIELDS = ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit'];
+var FIELDS = ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit', 'authCode'];
 var state = { current: {}, privHex: '', pubHex: '', code: '', signOut: false, returnTo: '' };
 
 function b64uToHex(s) {
@@ -239,6 +250,7 @@ function sheetRow(k, v, copy) {
 }
 function render() {
   var c = state.current, pub = state.pubHex || c.pubHex, f = readForm();
+  if (f.authCode) { state.code = cleanCode(f.authCode); state.signOut = false; }
   var d = f.domain;
   $('pem').value = pemFromPub(pub);
   $('pairLink').textContent = 'tesla.com/_ak/' + (d || '…');
@@ -273,7 +285,7 @@ function render() {
   if (!step2) missing.push('your key address (step 2)');
   if (!step3) missing.push('your Client ID and secret (step 3)');
   $('signin').disabled = missing.length > 0;
-  $('signinHint').textContent = state.code ? 'Signed in. Tap "Save to watch" at the bottom to finish.' :
+  $('signinHint').textContent = state.code ? 'Got it. Tap "Save to watch" at the bottom now, before the code expires.' :
     (missing.length ? 'First fill in ' + missing.join(' and ') + '.' : '');
 
   // What to do next
@@ -302,16 +314,31 @@ function render() {
   }
 }
 
-function signIn() {
+function authUrl(stateStr) {
   var f = readForm();
+  return 'https://auth.tesla.com/oauth2/v3/authorize?' + [
+    'response_type=code', 'client_id=' + encodeURIComponent(f.clientId), 'redirect_uri=' + encodeURIComponent(REDIRECT),
+    'scope=' + encodeURIComponent(SCOPES), 'state=' + stateStr, 'locale=en-US'].join('&');
+}
+function copySignIn(btn) {
   if ($('signin').disabled) return;
-  var nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  state.signOut = false; persist();
+  // "c" marks the copy-link flow, so Tesla's return page shows the code instead of finishing here.
+  copyText(authUrl('c' + Math.random().toString(36).slice(2)), btn);
+}
+function signInHere() {
+  if ($('signin').disabled) { alert('Fill in steps 2 and 3 first.'); return; }
+  var nonce = 'w' + Math.random().toString(36).slice(2) + Date.now().toString(36);
   state.signOut = false;
   persist();
   localStorage.setItem('tr_oauth_state', nonce);
-  location.href = 'https://auth.tesla.com/oauth2/v3/authorize?' + [
-    'response_type=code', 'client_id=' + encodeURIComponent(f.clientId), 'redirect_uri=' + encodeURIComponent(REDIRECT),
-    'scope=' + encodeURIComponent(SCOPES), 'state=' + nonce, 'locale=en-US'].join('&');
+  location.href = authUrl(nonce);
+}
+function cleanCode(v) {
+  v = String(v || '').trim();
+  var m = v.match(/[?&]code=([^&#\s]+)/);
+  if (m) v = decodeURIComponent(m[1]);
+  return v.replace(/\s/g, '');
 }
 
 function save() {
@@ -336,6 +363,15 @@ function fillForm(src) { Object.keys(src || {}).forEach(function (k) { if ($(k) 
   var fromHash = null;
   try { fromHash = location.hash.length > 1 ? JSON.parse(decodeURIComponent(location.hash.slice(1))) : null; } catch (e) { fromHash = null; }
 
+  var st = q.get('state') || '';
+  if (q.get('code') && (st.charAt(0) === 'c' || !draft || st !== localStorage.getItem('tr_oauth_state'))) {
+    // Tesla sent us back in a normal browser: just show the code to copy into the Pebble app.
+    Array.prototype.forEach.call(document.querySelectorAll('.card, .save, .next, .status, .sub'), function (el) { el.style.display = 'none'; });
+    $('codeView').style.display = '';
+    $('codeText').textContent = q.get('code');
+    history.replaceState(null, '', REDIRECT);
+    return;
+  }
   if (q.get('code') || q.get('error')) {
     // Back from Tesla's login page: everything we need is in the draft.
     if (draft) {
