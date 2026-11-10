@@ -166,7 +166,14 @@ function statusMsg(d, at, carState, text) {
 }
 function cached() { return T.getJSON('tr_last') || { at: 0, d: {} }; }
 var lastState = STATE.UNKNOWN;
-function sendCached(state, text) { lastState = state; var c = cached(); send(statusMsg(c.d, c.at, state, text)); }
+// Every status update goes through publish(): the watch's own screens redraw from it, and every menu
+// page the watch has open is rebuilt from the same data, so no screen can show an older value.
+function publish(d, at, state, text) {
+  lastState = state;
+  send(statusMsg(d, at, state, text));
+  resendMenus();
+}
+function sendCached(state, text) { var c = cached(); publish(c.d, c.at, state, text); }
 function stateForError(e) {
   if (!e) return STATE.ERROR;
   if (e.code === 'setup' || e.code === 'novehicle') return STATE.SETUP;
@@ -182,8 +189,7 @@ function refresh(forceWake, done) {
   function getData() {
     T.vehicleData(function (e, d) {
       if (e) { sendCached(stateForError(e), e.text); return done(); }
-      lastState = STATE.ONLINE;
-      send(statusMsg(d, Date.now(), STATE.ONLINE, ''));
+      publish(d, Date.now(), STATE.ONLINE, '');
       watchDriving(d);
       done();
     });
@@ -209,7 +215,7 @@ var driveTimer = null;
 function watchDriving(d) {
   clearTimeout(driveTimer); driveTimer = null;
   var g = gear(d);
-  if (g >= 1 && g <= 3) driveTimer = setTimeout(function () { updatePhonePos(function () { refresh(false, resendMenu); }); }, 60000);
+  if (g >= 1 && g <= 3) driveTimer = setTimeout(function () { updatePhonePos(function () { refresh(false); }); }, 60000);
 }
 
 // Once the car has accepted a command, show its result everywhere right away. The follow-up
@@ -263,9 +269,7 @@ function applyConfirmed(name, arg) {
     default: return;
   }
   T.setJSON('tr_last', { at: Date.now(), d: d });
-  lastState = STATE.ONLINE;
-  send(statusMsg(d, Date.now(), STATE.ONLINE, ''));
-  resendMenu();
+  publish(d, Date.now(), STATE.ONLINE, '');
 }
 
 // After every command, read the car's real state 3 s, 13 s and 43 s later. The watch only
@@ -274,7 +278,7 @@ var followUps = [];
 function scheduleFollowUps() {
   followUps.forEach(clearTimeout);
   followUps = [3000, 13000, 43000].map(function (ms) {
-    return setTimeout(function () { refresh(false, resendMenu); }, ms);
+    return setTimeout(function () { refresh(false); }, ms);
   });
 }
 
@@ -306,7 +310,7 @@ function runCommand(id, value) {
 // ---------- "More" menus, built here and shown by the watch ----------
 // Each row: title, subtitle, action.  Actions: "p:page" open page, "c:cmd:arg" run,
 // "k:Question?:cmd:arg" confirm first, "w:..." handled on the watch, "" info only.
-var openPage = null;
+var openPages = [];  // the watch's menu stack, bottom first, e.g. ['root', 'charging', 'limit']
 function row(t, s, a) { return [String(t).slice(0, 28), String(s || '').slice(0, 34), a || '']; }
 function onOff(v) { return v ? 'On' : 'Off'; }
 function hm(mins) { mins = Math.round(mins || 0); return mins >= 60 ? Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm' : mins + ' min'; }
@@ -334,7 +338,7 @@ function cargoRows(d, rows) {
 }
 function buildPage(page, cb) {
   var d = cached().d || {}, ch = d.charge_state || {}, cl = d.climate_state || {}, vs = d.vehicle_state || {};
-  var u = unitsFlags(d), cfg = T.cfg(), rows = [], title = 'More';
+  var u = unitsFlags(d), cfg = T.cfg(), rows = [], title = 'More', sel = 0;
   var live = lastState === STATE.ONLINE;
   var plugged = ch.charging_state && ch.charging_state !== 'Disconnected';
   switch (page) {
@@ -364,7 +368,8 @@ function buildPage(page, cb) {
       break;
     case 'limit':
       title = 'Charge limit';
-      [50, 60, 70, 75, 80, 85, 90, 95, 100].forEach(function (p) {
+      sel = 4;  // open on 80%
+      [100, 95, 90, 85, 80, 75, 70, 60, 50].forEach(function (p) {
         rows.push(row(p + '%', p === ch.charge_limit_soc ? 'Current' : '', 'c:charge_limit:' + p));
       });
       break;
@@ -466,19 +471,23 @@ function buildPage(page, cb) {
     default:
       rows.push(row('Unknown page', page, ''));
   }
-  cb(title, rows);
+  cb(title, rows, sel);
 }
 function sendPage(page) {
-  buildPage(page, function (title, rows) {
-    send({ Type: TYPE.MENU, MenuPage: page, MenuTitle: title,
+  buildPage(page, function (title, rows, sel) {
+    send({ Type: TYPE.MENU, MenuPage: page, MenuTitle: title, MenuSel: sel || 0,
       MenuRows: rows.slice(0, 20).map(function (r) { return r.join('\t'); }).join('\n') });
   });
 }
-function resendMenu() { if (openPage && openPage !== 'chargers') sendPage(openPage); }
+function resendMenus() {
+  openPages.slice().reverse().forEach(function (pg) { if (pg !== 'chargers') sendPage(pg); });
+}
 function runAction(a) {
   var parts = String(a).split(':');
   if (parts[0] === 'c') return runNamed(parts[1], parts[2] !== undefined ? Number(parts[2]) : undefined, 0);
 }
+
+function stack(t) { return String(t || '').split('|').filter(function (x) { return x; }); }
 
 // ---------- Pebble events ----------
 Pebble.addEventListener('ready', function () {
@@ -490,10 +499,10 @@ Pebble.addEventListener('ready', function () {
 Pebble.addEventListener('appmessage', function (e) {
   var p = e.payload || {};
   if (p.Type === TYPE.CMD) runCommand(p.Cmd, p.Value || 0);
-  else if (p.Type === TYPE.REFRESH) updatePhonePos(function () { refresh(p.Value === 1, resendMenu); });
-  else if (p.Type === TYPE.SETTING) { var c = T.cfg(); c.split = !!p.Value; T.saveCfg(c); sendCached(lastState, ''); resendMenu(); }
-  else if (p.Type === TYPE.MENU_REQ) { openPage = p.Text || 'root'; sendPage(openPage); }
-  else if (p.Type === TYPE.MENU_CLOSE) openPage = p.Text || null;
+  else if (p.Type === TYPE.REFRESH) updatePhonePos(function () { refresh(p.Value === 1); });
+  else if (p.Type === TYPE.SETTING) { var c = T.cfg(); c.split = !!p.Value; T.saveCfg(c); sendCached(lastState, ''); }
+  else if (p.Type === TYPE.MENU_REQ) { openPages = stack(p.Text || 'root'); sendPage(openPages[openPages.length - 1]); }
+  else if (p.Type === TYPE.MENU_CLOSE) openPages = stack(p.Text);
   else if (p.Type === TYPE.ACTION) runAction(p.Text || '');
 });
 

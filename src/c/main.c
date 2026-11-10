@@ -78,7 +78,7 @@ static bool s_busy;
 static Layer *s_main_layer, *s_climate_layer, *s_seat_layer;
 
 static void rm_redraw(void);
-static void rm_receive(const char *page, const char *title, const char *rows);
+static void rm_receive(const char *page, const char *title, const char *rows, int sel);
 static void redraw(void) {
   rm_redraw();
   if (s_main_layer) layer_mark_dirty(s_main_layer);
@@ -205,7 +205,7 @@ static void inbox(DictionaryIterator *it, void *ctx) {
     anim_kick();
   } else if (type == T_MENU) {
     Tuple *pg = dict_find(it, MESSAGE_KEY_MenuPage), *ti = dict_find(it, MESSAGE_KEY_MenuTitle), *rw = dict_find(it, MESSAGE_KEY_MenuRows);
-    if (pg && rw) rm_receive(pg->value->cstring, ti ? ti->value->cstring : "", rw->value->cstring);
+    if (pg && rw) rm_receive(pg->value->cstring, ti ? ti->value->cstring : "", rw->value->cstring, tint(it, MESSAGE_KEY_MenuSel, 0));
   } else if (type == T_PROGRESS) {
     toast(TOAST_PROGRESS, text ? text->value->cstring : "Working", 90000);
   } else if (type == T_RESULT) {
@@ -526,6 +526,16 @@ static void send_action(const char *action, const char *what) {
   send_text(T_ACTION, action);
 }
 
+// Tell the phone every menu page that is open (e.g. "root|charging|limit"), so it can keep them all current.
+static void send_stack(int type) {
+  char st[RM_MAX * 17] = "";
+  for (int i = 0; i < s_rm_depth; i++) {
+    if (!s_rm[i].win) continue;
+    if (st[0]) strncat(st, "|", sizeof(st) - strlen(st) - 1);
+    strncat(st, s_rm[i].page, sizeof(st) - strlen(st) - 1);
+  }
+  send_text(type, st);
+}
 static uint16_t rm_rows(MenuLayer *ml, uint16_t sec, void *ctx) { RMenu *m = ctx; return m->n ? m->n : 1; }
 static void rm_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void *c) {
   RMenu *m = c;
@@ -561,7 +571,7 @@ static void rm_select(MenuLayer *ml, MenuIndex *idx, void *c) {
     memcpy(question, q, ql); question[ql] = 0;
     confirm(question, 0, m->t[idx->row]);
     snprintf(s_confirm_action, sizeof(s_confirm_action), "c:%s", rest + 1);
-  } else if (!strcmp(a, "w:split")) { set_split(!s.split); send_text(T_MENU_REQ, m->page); }
+  } else if (!strcmp(a, "w:split")) { set_split(!s.split); send_stack(T_MENU_REQ); }
   else if (!strcmp(a, "w:refresh")) send_refresh(true);
 }
 static void rm_parse(RMenu *m, const char *rows) {
@@ -601,8 +611,7 @@ static void rm_unload(Window *w) {
   m->n = 0;
   window_destroy(w); m->win = NULL;
   s_rm_depth--;
-  // tell the phone which page (if any) is still showing, so it keeps that one up to date
-  send_text(T_MENU_CLOSE, s_rm_depth > 0 ? s_rm[s_rm_depth - 1].page : "");
+  send_stack(T_MENU_CLOSE);
 }
 static void open_remote(const char *page) {
   if (s_rm_depth >= RM_MAX) return;
@@ -615,15 +624,19 @@ static void open_remote(const char *page) {
   window_set_background_color(m->win, COL_BG);
   window_set_window_handlers(m->win, (WindowHandlers){ .load = rm_load, .unload = rm_unload });
   window_stack_push(m->win, true);
-  send_text(T_MENU_REQ, page);
+  send_stack(T_MENU_REQ);
 }
-static void rm_receive(const char *page, const char *title, const char *rows) {
+static void rm_receive(const char *page, const char *title, const char *rows, int sel) {
   for (int i = s_rm_depth - 1; i >= 0; i--) {
     RMenu *m = &s_rm[i];
     if (strcmp(m->page, page)) continue;
+    bool first = m->n == 0;
     strncpy(m->title, title, sizeof(m->title) - 1);
     rm_parse(m, rows);
-    if (m->ml) menu_layer_reload_data(m->ml);
+    if (m->ml) {
+      menu_layer_reload_data(m->ml);  // keeps the highlighted row on later updates
+      if (first && sel > 0 && sel < m->n) menu_layer_set_selected_index(m->ml, (MenuIndex){ 0, sel }, MenuRowAlignCenter, false);
+    }
     return;
   }
 }
@@ -1457,7 +1470,7 @@ static void init(void) {
   if (DEMO_SCREEN == 2) open_seats();
   if (DEMO_SCREEN == 3) {
     open_remote("root");
-    rm_receive("root", "More", "Charging\tCharging · 1h 25m left\tp:charging\nClimate\tOn · 70°\tp:climate\nSecurity\tSentry Off · Locked\tp:security\nControls\tLights, horn, windows, lids\tp:controls\nCar info\tTires, odometer, software\tp:info");
+    rm_receive("root", "More", "Charging\tCharging · 1h 25m left\tp:charging\nClimate\tOn · 70°\tp:climate\nSecurity\tSentry Off · Locked\tp:security\nControls\tLights, horn, windows, lids\tp:controls\nCar info\tTires, odometer, software\tp:info", 0);
   }
 #endif
 }

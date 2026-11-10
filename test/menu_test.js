@@ -48,11 +48,18 @@ wait(1500, function () {
 });
 function actions() {
   sent = []; calls = []; scheduled = [];
-  handlers.appmessage({ payload: { Type: 7, Text: 'charging' } });
+  handlers.appmessage({ payload: { Type: 7, Text: 'root|charging|limit' } });
   handlers.appmessage({ payload: { Type: 9, Text: 'c:charge_limit:90' } });
   wait(2500, function () {
     var res = sent.filter(function (m) { return m.Type === 3; });
     console.log('\nACTION charge_limit:90 ->', JSON.stringify(res));
+    var afterOk = sent.slice(sent.findIndex(function (m) { return m.Type === 3; }));
+    var pagesNow = afterOk.filter(function (m) { return m.Type === 8; }).slice(0, 3);
+    var ch = pagesNow.filter(function (m) { return m.MenuPage === 'charging'; })[0];
+    console.log((pagesNow.length === 3 && ch && /Charge limit\t90%/.test(ch.MenuRows) ? 'PASS' : 'FAIL') +
+      ' every open page (' + pagesNow.map(function (m) { return m.MenuPage; }).join(', ') + ') updated at once');
+    var lim = sent.filter(function (m) { return m.Type === 8 && m.MenuPage === 'limit'; })[0];
+    console.log((lim && lim.MenuSel === 4 && /^100%/.test(lim.MenuRows) ? 'PASS' : 'FAIL') + ' limit list starts at 100% and opens on 80%');
     var firstStatus = sent.filter(function (m) { return m.Type === 1; })[0];
     console.log((firstStatus && firstStatus.ChargeLimit === 90 ? 'PASS' : 'FAIL') + ' watch shows new limit as soon as the car accepts it');
     console.log('follow-up refreshes scheduled at (ms):', JSON.stringify(scheduled));
