@@ -254,12 +254,12 @@ function render() {
   var d = f.domain;
   $('pem').value = pemFromPub(pub);
   $('pairLink').textContent = 'tesla.com/_ak/' + (d || '…');
-  var origin = (!d || /(^|\.)fleetkey\.net$/.test(d)) ? 'https://fleetkey.net' : 'https://' + d;
+  var origin = d ? 'https://' + d : 'https://your-address.fleetkey.net (fill in step 2 first)';
   $('sheet').innerHTML =
     sheetRow('Application name', 'Anything, e.g. <b>My Pebble Tesla</b>') +
     sheetRow('Description / purpose', 'Anything, e.g. <b>Personal smartwatch remote</b>') +
     sheetRow('OAuth grant type', '<b>Authorization Code and Machine-to-Machine</b>') +
-    sheetRow('Allowed origin URL', esc(origin), origin) +
+    sheetRow('Allowed origin URL', esc(origin) + (d ? '<br><span style="color:var(--dim)">Your own key address, with https:// in front</span>' : ''), d ? origin : '') +
     sheetRow('Allowed redirect URI', esc(REDIRECT), REDIRECT) +
     sheetRow('Allowed returned URL', 'Leave empty') +
     sheetRow('Scopes', 'Tick <b>Vehicle Information</b>, <b>Vehicle Commands</b> and <b>Vehicle Charging Management</b>') +
