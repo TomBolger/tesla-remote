@@ -8,15 +8,17 @@ needed because the Pebble app blocks direct calls to Tesla's car server. It stor
 **Watch:** lock/unlock, frunk, trunk, climate on/off, temperature, defrost, driver seat heat, flash, honk, battery and range.
 **Watches:** Pebble Time / Time Steel (basalt), Time Round (chalk), Pebble 2 (diorite), Pebble 2 Duo (flint), Time 2 (emery), Round 2 (gabbro).
 
-## Using it (each person, once)
-Open the app's settings in the Pebble phone app and follow the five steps:
-1. The phone makes a car key for you.
-2. Paste the public key into [Fleet Key](https://fleetkey.net) (free) and copy the address it gives you.
-3. Create a free app at [developer.tesla.com](https://developer.tesla.com/request) with the origin and redirect shown, then paste in the Client ID and secret.
-4. Sign in with Tesla, then tap **Save to watch**.
-5. Open the `tesla.com/_ak/...` link and approve the key in the Tesla app.
+## Setting it up (about 10 minutes, once)
+Install the app, then open its settings in the Pebble phone app. The settings page walks you through four steps.
+Tesla's own pages don't open inside the Pebble settings screen, so you copy links into Chrome or Safari and copy a
+couple of things back. The page remembers your progress while you switch apps.
 
-Tesla gives each account a monthly API credit that covers normal personal use. You pay nothing to this project.
+1. **Put your car key online.** Copy your key, paste it into [Fleet Key](https://fleetkey.net) (free), and paste back the address it gives you.
+2. **Make your free Tesla app** at developer.tesla.com. The page shows exactly what to type in each box, with Copy buttons.
+3. **Sign in with Tesla** in your browser, copy the code it shows, paste it back, and tap **Finish**.
+4. **Add the key to your car:** near your car, open the link the page gives you and approve the key in the Tesla app.
+
+Tesla gives every account a monthly API allowance that covers normal personal use, and this project charges nothing.
 
 ## Watch buttons
 - Home: Up/Down choose a control, Select runs it, hold Select to wake the car and refresh.
