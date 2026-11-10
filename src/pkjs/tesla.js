@@ -229,6 +229,13 @@ function wake(progress, cb) {
   });
 }
 
+function nearbyChargers(cb) {
+  api('GET', '/api/1/vehicles/' + vin() + '/nearby_charging_sites', null, function (e, j) {
+    if (e) return cb(e);
+    cb(null, j.response || {});
+  });
+}
+
 // ---------- Vehicle Command Protocol ----------
 function sessKey(domain) { return 'tr_sess_' + vin() + '_' + domain; }
 function vinBytes() { return C.strToBytes(vin()); }
@@ -371,8 +378,31 @@ function infoAction(vehicleActionBytes) { return P.fMsg(2, vehicleActionBytes); 
 var COMMANDS = {
   lock: function () { return [DOMAIN_VCSEC, P.fVarint(2, 1)]; },
   unlock: function () { return [DOMAIN_VCSEC, P.fVarint(2, 0)]; },
-  frunk: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(6, 1))]; },
-  trunk: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(5, 1))]; },
+  // Closures: 3 = open, 4 = close (explicit, so a second tap can't toggle the wrong way)
+  frunk: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(6, 3))]; },
+  trunk: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(5, 3))]; },
+  trunk_close: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(5, 4))]; },
+  auto_secure: function () { return [DOMAIN_VCSEC, P.fVarint(2, 29)]; },
+  charge_start: function () { return [DOMAIN_INFO, infoAction(P.fMsg(6, P.fMsg(2)))]; },
+  charge_stop: function () { return [DOMAIN_INFO, infoAction(P.fMsg(6, P.fMsg(5)))]; },
+  charge_limit: function (p) { return [DOMAIN_INFO, infoAction(P.fMsg(5, P.fVarint(1, p)))]; },
+  charge_amps: function (a) { return [DOMAIN_INFO, infoAction(P.fMsg(43, P.fVarint(1, a)))]; },
+  port_open: function () { return [DOMAIN_INFO, infoAction(P.fMsg(62))]; },
+  port_close: function () { return [DOMAIN_INFO, infoAction(P.fMsg(61))]; },
+  sentry: function (on) { return [DOMAIN_INFO, infoAction(P.fMsg(30, on ? P.fBool(1, true) : []))]; },
+  guest: function (on) { return [DOMAIN_INFO, infoAction(P.fMsg(65, on ? P.fBool(1, true) : []))]; },
+  keeper: function (m) { return [DOMAIN_INFO, infoAction(P.fMsg(44, m ? P.fVarint(1, m) : []))]; },
+  cop: function (v) { // 0 off, 1 on, 2 fan only
+    return [DOMAIN_INFO, infoAction(P.fMsg(50, v ? P.fBool(1, true) : [], v === 2 ? P.fBool(2, true) : []))];
+  },
+  cop_temp: function (lv) { return [DOMAIN_INFO, infoAction(P.fMsg(66, P.fVarint(1, lv)))]; },
+  bioweapon: function (on) { return [DOMAIN_INFO, infoAction(P.fMsg(35, on ? P.fBool(1, true) : []))]; },
+  auto_seat: function (v) { // v = position * 10 + on (position 1 driver, 2 passenger)
+    var pos = Math.floor(v / 10), on = v % 10;
+    return [DOMAIN_INFO, infoAction(P.fMsg(48, P.fMsg(1, on ? P.fBool(1, true) : [], P.fVarint(2, pos))))];
+  },
+  low_power: function (on) { return [DOMAIN_INFO, infoAction(P.fMsg(130, on ? P.fBool(1, true) : []))]; },
+  accessory: function (on) { return [DOMAIN_INFO, infoAction(P.fMsg(138, on ? P.fBool(1, true) : []))]; },
   climate_on: function () { return [DOMAIN_INFO, infoAction(P.fMsg(10, P.fBool(1, true)))]; },
   climate_off: function () { return [DOMAIN_INFO, infoAction(P.fMsg(10))]; },
   set_temp: function (c) {
@@ -424,6 +454,6 @@ function command(name, value, progress, cb) {
 module.exports = {
   FLEET: FLEET, SCOPES: SCOPES, cfg: cfg, saveCfg: saveCfg, tokens: tokens, getJSON: getJSON,
   completeSignIn: completeSignIn, retryRegistration: retryRegistration, listVehicles: listVehicles, vehicleData: vehicleData,
-  vehicleState: vehicleState, wake: wake, command: command, COMMANDS: COMMANDS,
+  vehicleState: vehicleState, wake: wake, nearbyChargers: nearbyChargers, command: command, COMMANDS: COMMANDS,
   _internal: { handshake: handshake, sendSigned: sendSigned, tlv: tlv }
 };

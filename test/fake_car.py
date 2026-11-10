@@ -106,12 +106,21 @@ def main():
         raw = base64.b64decode(json.loads(body)['routable_message'])
         res = handle_routable(raw); save()
         return out(200, {'response': base64.b64encode(res).decode()})
+    if path.endswith('/nearby_charging_sites'):
+        save(); return out(200, {'response': {'superchargers': [{'name': 'Spokane Valley, WA', 'distance_miles': 3.2, 'available_stalls': 6, 'total_stalls': 12}],
+                                               'destination_charging': [{'name': 'Library Lot', 'distance_miles': 0.4}]}})
     if '/vehicle_data' in path:
         save(); return out(200, {'response': {'display_name': 'Blue Thunder', 'state': 'online',
-            'charge_state': {'battery_level': 78, 'battery_range': 241.3, 'charging_state': 'Disconnected', 'charge_limit_soc': 80},
+            'charge_state': {'battery_level': 78, 'battery_range': 241.3, 'charging_state': 'Charging', 'charge_limit_soc': 80, 'charger_power': 7, 'minutes_to_full_charge': 85, 'charge_current_request': 32, 'charge_current_request_max': 48, 'charge_port_door_open': True, 'charge_energy_added': 12.4, 'charger_actual_current': 32},
             'climate_state': {'inside_temp': 18.5, 'outside_temp': 9.0, 'driver_temp_setting': 21.0, 'is_climate_on': False,
-                              'is_front_defroster_on': False, 'seat_heater_left': 0},
-            'vehicle_state': {'locked': True, 'ft': 0, 'rt': 0, 'vehicle_name': 'Blue Thunder'},
-            'vehicle_config': {'car_type': 'modely'}, 'gui_settings': {'gui_temperature_units': 'F', 'gui_distance_units': 'mi/hr'}}})
+                              'is_front_defroster_on': False, 'is_rear_defroster_on': False, 'seat_heater_left': 0, 'seat_heater_right': 0,
+                              'seat_heater_rear_left': 0, 'seat_heater_rear_center': 0, 'seat_heater_rear_right': 0,
+                              'climate_keeper_mode': 'off', 'cabin_overheat_protection': 'FanOnly', 'cop_activation_temperature': 'High',
+                              'auto_seat_climate_left': True, 'auto_seat_climate_right': False},
+            'vehicle_state': {'locked': True, 'ft': 0, 'rt': 0, 'vehicle_name': 'Blue Thunder', 'sentry_mode': False, 'odometer': 12345.6,
+                              'tpms_pressure_fl': 2.9, 'tpms_pressure_fr': 2.9, 'tpms_pressure_rl': 2.85, 'tpms_pressure_rr': 2.9,
+                              'car_version': '2026.38.4 abc', 'software_update': {'status': 'available', 'version': '2026.44'},
+                              'df': 0, 'pf': 0, 'dr': 0, 'pr': 1, 'fd_window': 0, 'fp_window': 0, 'rd_window': 0, 'rp_window': 0, 'is_user_present': False},
+            'vehicle_config': {'car_type': 'model3'}, 'gui_settings': {'gui_temperature_units': 'F', 'gui_distance_units': 'mi/hr'}}})
     save(); out(404, {'error': 'not found ' + path})
 main()

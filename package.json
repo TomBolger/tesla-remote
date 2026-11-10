@@ -67,7 +67,11 @@
       "Windows",
       "Split",
       "Dist",
-      "Bearing"
+      "Bearing",
+      "HasRearC",
+      "MenuPage",
+      "MenuTitle",
+      "MenuRows"
     ],
     "resources": {
       "media": [
