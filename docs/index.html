@@ -161,7 +161,7 @@ var $ = function (id) { return document.getElementById(id); };
 var REDIRECT = location.origin + location.pathname;
 var SCOPES = 'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds';
 // The project's relay (see /relay). Needed because the Pebble phone app blocks direct calls to Tesla's car server.
-var RELAY_DEFAULT = '';
+var RELAY_DEFAULT = 'https://tesla-remote-relay.tombolger.workers.dev';
 var FIELDS = ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit', 'authCode', 'relay'];
 var state = { current: {}, privHex: '', pubHex: '', code: '', signOut: false, returnTo: '' };
 
