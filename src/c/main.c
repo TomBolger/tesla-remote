@@ -674,17 +674,18 @@ static void climate_update(Layer *layer, GContext *ctx) {
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 
   // title + power pill
-  int ty = round ? H / 10 : 6;
+  bool small_round = round && !large;
+  int ty = small_round ? H / 12 : round ? H / 10 : 6;
   text_at(ctx, "Climate", f18b, GRect(round ? 0 : 8, ty - 2, round ? W : W / 2, 22), round ? GTextAlignmentCenter : GTextAlignmentLeft, COL_TEXT);
   int pw = 42, ph = 18;
-  GRect pill = round ? GRect((W - pw) / 2, ty + 20, pw, ph) : GRect(areaw - pw - 6, ty + 1, pw, ph);
+  GRect pill = round ? GRect((W - pw) / 2, ty + (small_round ? 19 : 20), pw, ph) : GRect(areaw - pw - 6, ty + 1, pw, ph);
   chip(ctx, pill, s.climate ? "ON" : "OFF", s.climate);
 #ifdef HAS_TOUCH
   s_cl_pill = pill; s_cl_areaw = areaw;
   s_cl_chip[0] = s_cl_chip[1] = GRect(0, 0, 0, 0);
 #endif
 
-  int tcy = round ? H * 47 / 100 : H * 44 / 100;
+  int tcy = small_round ? H * 53 / 100 : round ? H * 47 / 100 : H * 44 / 100;  // small round: keep the up arrow clear of the pill
 #ifdef HAS_TOUCH
   s_cl_tcy = tcy;
   s_cl_hint = GRect(0, tcy + 44, W, 26);
