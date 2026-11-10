@@ -30,7 +30,15 @@ function TErr(code, text, extra) { this.code = code; this.text = text; this.extr
 function err(code, text, extra) { return new TErr(code, text, extra); }
 
 // ---------- HTTP ----------
+// The Pebble phone app blocks direct calls to Tesla's car server (no CORS headers),
+// so those go through the project's tiny relay. Login calls go direct (Tesla allows those).
+function viaRelay(url) {
+  var r = cfg().relay;
+  if (!r || r === 'off' || url.indexOf('https://fleet-api.') !== 0) return url;
+  return r.replace(/\/+$/, '') + '/' + url.slice(8);
+}
 function http(method, url, headers, body, cb) {
+  url = viaRelay(url);
   var x = new XMLHttpRequest();
   x.open(method, url, true);
   x.timeout = 45000;
@@ -96,7 +104,7 @@ function api(method, path, body, cb, retried) {
       if (s >= 200 && s < 300) return cb(null, j || {});
       if (s === 401 && !retried) return refresh(function (re) { if (re) return cb(re); api(method, path, body, cb, true); });
       if (s === 408 || /offline or asleep|vehicle unavailable/i.test(msg)) return cb(err('asleep', 'Car is asleep'));
-      if (s === 0) return cb(err('net', 'No connection'));
+      if (s === 0) return cb(err('net', 'Can\'t reach Tesla', 'no reply (offline, or blocked by the phone app)'));
       if (s === 401) return cb(err('setup', 'Sign in again'));
       if (s === 402) return cb(err('billing', 'Tesla billing needed'));
       if (s === 403) return cb(err('perm', 'Missing permission', msg));
@@ -116,7 +124,7 @@ function registerPartner(cb) {
     scope: 'openid vehicle_device_data vehicle_cmds vehicle_charging_cmds', audience: base()
   }), function (s, t) {
     var j = parse(t);
-    if (s !== 200 || !j || !j.access_token) return cb(err('register', 'Partner token failed', (j && j.error_description) || s));
+    if (s !== 200 || !j || !j.access_token) return cb(err('register', 'Partner token failed', 'HTTP ' + s + ((j && (j.error_description || j.error)) ? ': ' + (j.error_description || j.error) : '')));
     http('POST', base() + '/api/1/partner_accounts',
       { Authorization: 'Bearer ' + j.access_token, 'Content-Type': 'application/json' },
       JSON.stringify({ domain: c.domain }), function (s2, t2) {
@@ -124,7 +132,7 @@ function registerPartner(cb) {
         var j2 = parse(t2) || {};
         var m = j2.error_description || j2.error || t2 || '';
         if (/already/i.test(m)) return cb(null);
-        cb(err('register', 'Registration failed', m.slice(0, 120)));
+        cb(err('register', 'Registration failed', s2 === 0 ? 'no reply from Tesla (blocked by the phone app; check the relay address)' : 'HTTP ' + s2 + (m ? ': ' + String(m).slice(0, 120) : '')));
       });
   });
 }
@@ -148,6 +156,17 @@ function listVehicles(cb) {
     saveCfg(c);
     if (!list.length) return cb(err('novehicle', 'No cars on account'));
     cb(null, list);
+  });
+}
+function retryRegistration(progress, cb) {
+  progress('Registering app');
+  findRegion(function () {
+    registerPartner(function (re) {
+      var c = cfg(); c.registerError = re ? (re.text + ': ' + re.extra) : ''; saveCfg(c);
+      if (re) return cb(re);
+      progress('Finding car');
+      listVehicles(function (le) { cb(le || null); });
+    });
   });
 }
 // Full flow after the settings page returns a sign-in code.
@@ -384,7 +403,7 @@ function command(name, value, progress, cb) {
 
 module.exports = {
   FLEET: FLEET, SCOPES: SCOPES, cfg: cfg, saveCfg: saveCfg, tokens: tokens, getJSON: getJSON,
-  completeSignIn: completeSignIn, listVehicles: listVehicles, vehicleData: vehicleData,
+  completeSignIn: completeSignIn, retryRegistration: retryRegistration, listVehicles: listVehicles, vehicleData: vehicleData,
   vehicleState: vehicleState, wake: wake, command: command, COMMANDS: COMMANDS,
   _internal: { handshake: handshake, sendSigned: sendSigned, tlv: tlv }
 };

@@ -175,7 +175,7 @@ Pebble.addEventListener('showConfiguration', function () {
     region: c.region || 'na', pubHex: c.pubHex || '', signedIn: !!tk.refresh,
     vehicles: c.vehicles || [], vin: c.vin || '', carName: c.carName || '',
     tempUnit: c.tempUnit || '', distUnit: c.distUnit || '', registerError: c.registerError || '',
-    paired: !!c.paired, needPair: !!c.needPair,
+    paired: !!c.paired, needPair: !!c.needPair, relay: c.relay || '', lastError: c.lastError || '',
     bigint: C.haveBigInt()
   };
   Pebble.openURL(CONFIG_URL + '#' + encodeURIComponent(JSON.stringify(current)));
@@ -188,7 +188,7 @@ Pebble.addEventListener('webviewclosed', function (e) {
     try { r = JSON.parse(e.response); } catch (y) { return; }
   }
   var c = T.cfg();
-  ['clientId', 'domain', 'region', 'redirectUri', 'vin', 'carName', 'tempUnit', 'distUnit'].forEach(function (k) {
+  ['clientId', 'domain', 'region', 'redirectUri', 'vin', 'carName', 'tempUnit', 'distUnit', 'relay'].forEach(function (k) {
     if (r[k] !== undefined) c[k] = r[k];
   });
   if (r.clientSecret) c.clientSecret = r.clientSecret;
@@ -204,11 +204,15 @@ Pebble.addEventListener('webviewclosed', function (e) {
   }
   if (r.signOut) { localStorage.removeItem('tr_tokens'); c.vin = ''; c.vehicles = []; }
   T.saveCfg(c);
+  function after(err) {
+    var cc = T.cfg(); cc.lastError = err ? (err.text + (err.extra ? ': ' + err.extra : '')) : ''; T.saveCfg(cc);
+    if (err) return sendCached(stateForError(err), err.text);
+    refresh(false);
+  }
   if (r.code) {
-    T.completeSignIn(r.code, progress, function (err) {
-      if (err) return sendCached(stateForError(err), err.text);
-      refresh(false);
-    });
+    T.completeSignIn(r.code, progress, after);
+  } else if (r.retryRegister) {
+    T.retryRegistration(progress, after);
   } else {
     refresh(false);
   }

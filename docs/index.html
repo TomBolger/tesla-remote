@@ -145,6 +145,9 @@
       <select id="distUnit"><option value="">Same as car</option><option value="mi">Miles</option><option value="km">Kilometers</option></select></div>
   </div>
   <details style="margin-top:14px"><summary>Advanced</summary>
+    <label for="relay">Relay address</label>
+    <input id="relay" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://…workers.dev">
+    <div class="hint">Leave as is unless you run your own relay. Type <b>off</b> to talk to Tesla directly.</div>
     <button class="btn ghost" onclick="newKey()">Make a new car key</button>
     <button class="btn ghost" onclick="signOut()">Sign out of Tesla</button>
     <button class="btn ghost" onclick="clearDraft()">Throw away unsaved changes</button>
@@ -157,7 +160,9 @@
 var $ = function (id) { return document.getElementById(id); };
 var REDIRECT = location.origin + location.pathname;
 var SCOPES = 'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds';
-var FIELDS = ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit', 'authCode'];
+// The project's relay (see /relay). Needed because the Pebble phone app blocks direct calls to Tesla's car server.
+var RELAY_DEFAULT = '';
+var FIELDS = ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit', 'authCode', 'relay'];
 var state = { current: {}, privHex: '', pubHex: '', code: '', signOut: false, returnTo: '' };
 
 function b64uToHex(s) {
@@ -292,7 +297,11 @@ function render() {
   if (!pub) setNext('Making your car key…');
   else if (c.bigint === false) setNext('Your Pebble phone app is too old to sign car commands. Please update it.', true);
   else if (state.code) setNext('<b>Almost done:</b> tap <b>Save to watch</b> at the bottom. Your watch will finish connecting to Tesla.');
-  else if (c.registerError && signedIn) setNext('<b>Tesla registration problem:</b> ' + esc(c.registerError) + '<br>Check your key address (step 2) and the allowed origin in your Tesla app (step 3), then sign in again.', true);
+  else if (c.registerError && signedIn) setNext('<b>Tesla registration problem:</b> ' + esc(c.registerError) +
+    '<br>Check your key address (step 2) and that your Tesla app lists <b>https://' + esc(d || 'your-key-address') + '</b> as an allowed origin.' +
+    '<button class="btn" style="margin-top:12px" onclick="save({ retryRegister: true })">Try registration again</button>', true);
+  else if (c.lastError && signedIn && !cars) setNext('<b>Problem talking to Tesla:</b> ' + esc(c.lastError) +
+    '<button class="btn" style="margin-top:12px" onclick="save({ retryRegister: true })">Try again</button>', true);
   else if (c.needPair && signedIn) setNext('<b>Last step:</b> your car doesn\'t know this key yet. Do step 5 near your car.', true);
   else if (signedIn && cars && c.paired) setNext('<b>All set.</b> Your watch is connected to ' + esc((c.vehicles.filter(function (v) { return v.vin === c.vin; })[0] || c.vehicles[0]).name) + '.');
   else if (signedIn && cars) setNext('<b>Last step:</b> add the key to your car (step 5), then try <b>More → Flash lights</b> on the watch.');
@@ -341,10 +350,11 @@ function cleanCode(v) {
   return v.replace(/\s/g, '');
 }
 
-function save() {
+function save(extra) {
   var f = readForm();
   var out = { clientId: f.clientId, domain: f.domain, region: f.region, redirectUri: REDIRECT,
-    carName: f.carName, tempUnit: f.tempUnit, distUnit: f.distUnit };
+    carName: f.carName, tempUnit: f.tempUnit, distUnit: f.distUnit, relay: (f.relay || RELAY_DEFAULT).trim() };
+  if (extra) Object.keys(extra).forEach(function (k) { out[k] = extra[k]; });
   if (f.vin) out.vin = f.vin;
   if (f.clientSecret) out.clientSecret = f.clientSecret;
   if (state.privHex) { out.privHex = state.privHex; out.pubHex = state.pubHex; }
@@ -388,7 +398,7 @@ function fillForm(src) { Object.keys(src || {}).forEach(function (k) { if ($(k) 
     state.current = fromHash || (draft && draft.current) || {};
     state.returnTo = q.get('return_to') || (draft && draft.returnTo) || '';
     var c = state.current;
-    fillForm({ domain: c.domain, clientId: c.clientId, region: c.region || 'na', carName: c.carName, tempUnit: c.tempUnit, distUnit: c.distUnit });
+    fillForm({ domain: c.domain, clientId: c.clientId, region: c.region || 'na', carName: c.carName, tempUnit: c.tempUnit, distUnit: c.distUnit, relay: c.relay || RELAY_DEFAULT });
     // Unsaved work from last time wins, so hopping out to a browser and back loses nothing.
     if (draft && draft.form) fillForm(draft.form);
     if (draft && draft.privHex) { state.privHex = draft.privHex; state.pubHex = draft.pubHex; }

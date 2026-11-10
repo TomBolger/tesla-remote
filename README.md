@@ -1,8 +1,9 @@
 # Tesla Remote for Pebble
 
 A free, open-source Tesla remote for Pebble watches, styled like Tesla's dark-mode screen.
-There is **no server**: the Pebble phone app talks straight to Tesla's official Fleet API and
-signs car commands itself, using the same method as Tesla's `tesla-http-proxy`.
+All the work happens on your phone: the Pebble phone app signs car commands itself, using the same method as
+Tesla's `tesla-http-proxy`. The only extra piece is a tiny, stateless relay (`relay/worker.js`, free on Cloudflare),
+needed because the Pebble app blocks direct calls to Tesla's car server. It stores nothing; you can run your own.
 
 **Watch:** lock/unlock, frunk, trunk, climate on/off, temperature, defrost, driver seat heat, flash, honk, battery and range.
 **Watches:** Pebble Time / Time Steel (basalt), Time Round (chalk), Pebble 2 (diorite), Pebble 2 Duo (flint), Time 2 (emery), Round 2 (gabbro).
@@ -25,6 +26,7 @@ Tesla gives each account a monthly API credit that covers normal personal use. Y
 ## For maintainers
 - `src/c/main.c`: watch app. `src/pkjs/`: phone code (`tesla.js` = Fleet API + command signing, `crypto.js` = P-256/SHA/HMAC/AES, no dependencies).
 - `docs/index.html`: the setup page. It must be on HTTPS because Tesla redirects back to it after sign-in. Turn on GitHub Pages for the `docs/` folder and make sure `CONFIG_URL` in `src/pkjs/index.js` matches.
+- `relay/worker.js`: the relay. Deploy it as a Cloudflare Worker and put its address in `RELAY_DEFAULT` in `docs/index.html`.
 - Build: `pebble build`. Tests: `node test/protocol_test.js` (needs Python packages `cryptography` and `protobuf`, plus Python classes compiled from Tesla's `.proto` files in `test/pb/`).
 
 ## Notes
