@@ -7,7 +7,7 @@ var FLEET = {
   eu: 'https://fleet-api.prd.eu.vn.cloud.tesla.com'
 };
 var TOKEN_URL = 'https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token';
-var SCOPES = 'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds';
+var SCOPES = 'openid offline_access vehicle_device_data vehicle_location vehicle_cmds vehicle_charging_cmds';
 
 var DOMAIN_VCSEC = 2;
 var DOMAIN_INFO = 3;
@@ -195,9 +195,15 @@ function vehicleState(cb) {
 }
 function vehicleData(cb) {
   if (!vin()) return cb(err('setup', 'Set up on phone'));
-  api('GET', '/api/1/vehicles/' + vin() +
-    '/vehicle_data?endpoints=' + encodeURIComponent('charge_state;climate_state;vehicle_state;vehicle_config;gui_settings'),
+  var parts = 'charge_state;climate_state;vehicle_state;vehicle_config;gui_settings';
+  var withLoc = !cfg().noLocation;
+  api('GET', '/api/1/vehicles/' + vin() + '/vehicle_data?endpoints=' + encodeURIComponent(parts + (withLoc ? ';location_data' : '')),
     null, function (e, j) {
+      if (e && withLoc && (e.code === 'perm' || e.code === 'http')) {
+        // No location permission yet: remember, and try again without it.
+        var c = cfg(); c.noLocation = true; saveCfg(c);
+        return vehicleData(cb);
+      }
       if (e) return cb(e);
       var d = j.response || {};
       setJSON('tr_last', { at: Date.now(), d: d });
@@ -374,9 +380,23 @@ var COMMANDS = {
   },
   defrost_on: function () { return [DOMAIN_INFO, infoAction(P.fMsg(12, P.fBool(1, true)))]; },
   defrost_off: function () { return [DOMAIN_INFO, infoAction(P.fMsg(12))]; },
-  seat: function (level) { // driver seat 0-3
-    var lv = [2, 3, 4, 5][Math.max(0, Math.min(3, level | 0))];
-    return [DOMAIN_INFO, infoAction(P.fMsg(36, P.fMsg(1, P.fMsg(lv), P.fMsg(7))))];
+  // value = position * 16 + level. Positions: 0 driver, 1 passenger, 2 rear left, 3 rear centre, 4 rear right.
+  seat: function (v) {
+    var pos = [7, 8, 9, 11, 12][Math.max(0, Math.min(4, (v >> 4) & 15))];
+    var lv = [2, 3, 4, 5][Math.max(0, Math.min(3, v & 15))];
+    return [DOMAIN_INFO, infoAction(P.fMsg(36, P.fMsg(1, P.fMsg(lv), P.fMsg(pos))))];
+  },
+  // Seat cooling (ventilated front seats). value = position * 16 + level (0 off .. 3 high)
+  cool: function (v) {
+    var pos = ((v >> 4) & 15) === 1 ? 2 : 1, lv = Math.max(0, Math.min(3, v & 15)) + 1;
+    return [DOMAIN_INFO, infoAction(P.fMsg(49, P.fMsg(1, P.fVarint(1, lv), P.fVarint(2, pos))))];
+  },
+  wheel_on: function () { return [DOMAIN_INFO, infoAction(P.fMsg(13, P.fBool(1, true)))]; },
+  wheel_off: function () { return [DOMAIN_INFO, infoAction(P.fMsg(13))]; },
+  vent: function () { return [DOMAIN_INFO, infoAction(P.fMsg(34, P.fMsg(3)))]; },
+  close_windows: function () { return [DOMAIN_INFO, infoAction(P.fMsg(34, P.fMsg(4)))]; },
+  set_temps: function (t) { // t = [driverC, passengerC]
+    return [DOMAIN_INFO, infoAction(P.fMsg(14, P.fMsg(5, P.fMsg(3)), P.fFloat(6, t[0]), P.fFloat(7, t[1])))];
   },
   flash: function () { return [DOMAIN_INFO, infoAction(P.fMsg(26))]; },
   honk: function () { return [DOMAIN_INFO, infoAction(P.fMsg(27))]; }

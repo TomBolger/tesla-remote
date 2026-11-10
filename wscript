@@ -33,7 +33,7 @@ def build(ctx):
     for platform in ctx.env.TARGET_PLATFORMS:
         ctx.env = ctx.all_envs[platform]
         if os.environ.get('DEMO'):
-            ctx.env.append_value('DEFINES', ['DEMO', 'DEMO_SCREEN=' + os.environ.get('DEMO_SCREEN', '0'), 'DEMO_TRUNK=' + os.environ.get('DEMO_TRUNK', '0')])
+            ctx.env.append_value('DEFINES', ['DEMO', 'DEMO_SCREEN=' + os.environ.get('DEMO_SCREEN', '0'), 'DEMO_TRUNK=' + os.environ.get('DEMO_TRUNK', '0'), 'DEMO_MODEL=' + os.environ.get('DEMO_MODEL', '2'), 'DEMO_CHARGING=' + os.environ.get('DEMO_CHARGING', '0'), 'DEMO_SPLIT=' + os.environ.get('DEMO_SPLIT', '0')])
         ctx.set_group(ctx.env.PLATFORM_NAME)
         app_elf = '{}/pebble-app.elf'.format(ctx.env.BUILD_DIR)
         ctx.pbl_build(source=ctx.path.ant_glob('src/c/**/*.c'), target=app_elf, bin_type='app')

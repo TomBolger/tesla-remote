@@ -2,7 +2,10 @@
   "name": "tesla-remote",
   "author": "Tesla Remote contributors",
   "version": "0.1.0",
-  "keywords": ["pebble-app", "tesla"],
+  "keywords": [
+    "pebble-app",
+    "tesla"
+  ],
   "private": true,
   "dependencies": {},
   "pebble": {
@@ -10,17 +13,155 @@
     "uuid": "7d4c2a6e-3f1b-4c8e-9a5d-2b6f8e1c4a70",
     "sdkVersion": "3",
     "enableMultiJS": true,
-    "targetPlatforms": ["basalt", "chalk", "diorite", "emery", "flint", "gabbro"],
-    "capabilities": ["configurable"],
-    "watchapp": { "watchface": false },
+    "targetPlatforms": [
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery",
+      "flint",
+      "gabbro"
+    ],
+    "capabilities": [
+      "configurable",
+      "location"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
     "messageKeys": [
-      "Type", "Cmd", "Value", "Text", "CarState", "HasData", "Battery", "Range", "Charging",
-      "ChargeLimit", "MinutesToFull", "Locked", "Frunk", "Trunk", "Climate", "InTemp", "OutTemp",
-      "SetTemp", "Defrost", "SeatHeat", "Units", "Model", "Age", "CarName"
+      "Type",
+      "Cmd",
+      "Value",
+      "Text",
+      "CarState",
+      "HasData",
+      "Battery",
+      "Range",
+      "Charging",
+      "ChargeLimit",
+      "MinutesToFull",
+      "Locked",
+      "Frunk",
+      "Trunk",
+      "Climate",
+      "InTemp",
+      "OutTemp",
+      "SetTemp",
+      "Defrost",
+      "SeatHeat",
+      "Units",
+      "Model",
+      "Age",
+      "CarName",
+      "PassTemp",
+      "SeatR",
+      "SeatRL",
+      "SeatRC",
+      "SeatRR",
+      "HasRear",
+      "CoolL",
+      "CoolR",
+      "CanCool",
+      "Wheel",
+      "RearDefrost",
+      "Windows",
+      "Split",
+      "Dist",
+      "Bearing"
     ],
     "resources": {
       "media": [
-        { "type": "bitmap", "name": "MENU_ICON", "file": "images/menu_icon.png", "menuIcon": true }
+        {
+          "type": "bitmap",
+          "name": "MENU_ICON",
+          "file": "images/menu_icon.png",
+          "menuIcon": true
+        },
+        {
+          "type": "bitmap",
+          "name": "TRUNK_0",
+          "file": "images/car/trunk_0.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "TRUNK_1",
+          "file": "images/car/trunk_1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "TRUNK_2",
+          "file": "images/car/trunk_2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "TRUNK_3",
+          "file": "images/car/trunk_3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "TRUNK_4",
+          "file": "images/car/trunk_4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "TRUNK_5",
+          "file": "images/car/trunk_5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "TRUNK_6",
+          "file": "images/car/trunk_6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "TRUNK_7",
+          "file": "images/car/trunk_7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FRUNK_0",
+          "file": "images/car/frunk_0.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FRUNK_1",
+          "file": "images/car/frunk_1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FRUNK_2",
+          "file": "images/car/frunk_2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FRUNK_3",
+          "file": "images/car/frunk_3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FRUNK_4",
+          "file": "images/car/frunk_4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FRUNK_5",
+          "file": "images/car/frunk_5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FRUNK_6",
+          "file": "images/car/frunk_6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "FRUNK_7",
+          "file": "images/car/frunk_7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "SEATS",
+          "file": "images/car/seats.png"
+        }
       ]
     }
   }

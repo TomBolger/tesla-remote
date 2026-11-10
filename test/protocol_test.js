@@ -21,7 +21,9 @@ T.saveCfg({ clientId: 'cid', clientSecret: 'sec', privHex: priv, pubHex: C.bytes
 function prog(t) { console.log('   progress:', t); }
 var steps = [
   ['lock'], ['unlock'], ['frunk'], ['trunk'], ['climate_on'], ['set_temp', 21.5], ['seat', 2],
-  ['defrost_on'], ['defrost_off'], ['climate_off'], ['flash'], ['honk', null, true]
+  ['defrost_on'], ['defrost_off'], ['climate_off'], ['flash'],
+  ['seat', 0x13], ['seat', 0x41], ['cool', 0x12], ['cool', 0x00], ['wheel_on'], ['wheel_off'],
+  ['vent'], ['close_windows'], ['set_temps', [21.5, 19]], ['honk', null, true]
 ];
 T.completeSignIn('CODE', prog, function (e) {
   console.log('signin:', e ? e.text : 'ok', 'vin=', T.cfg().vin);

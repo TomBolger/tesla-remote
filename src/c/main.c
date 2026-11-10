@@ -2,21 +2,25 @@
 #include <pebble.h>
 
 // ---------------- protocol (matches src/pkjs/index.js) ----------------
-enum { T_STATUS = 1, T_CMD = 2, T_RESULT = 3, T_REFRESH = 4, T_PROGRESS = 5 };
+enum { T_STATUS = 1, T_CMD = 2, T_RESULT = 3, T_REFRESH = 4, T_PROGRESS = 5, T_SETTING = 6 };
 enum { C_LOCK = 1, C_UNLOCK, C_FRUNK, C_TRUNK, C_CLIMATE_ON, C_CLIMATE_OFF, C_SET_TEMP,
-       C_DEFROST_ON, C_DEFROST_OFF, C_SEAT, C_FLASH, C_HONK };
+       C_DEFROST_ON, C_DEFROST_OFF, C_SEAT, C_FLASH, C_HONK, C_COOL, C_WHEEL_ON, C_WHEEL_OFF,
+       C_VENT, C_CLOSE_WIN, C_SET_TEMPS };
 enum { S_UNKNOWN = 0, S_ONLINE, S_ASLEEP, S_OFFLINE, S_ERROR, S_SETUP, S_PAIR, S_BUSY };
 #define NO_TEMP (-1000)
 #define PERSIST_STATUS 1
-#define STATUS_VERSION 2
+#define STATUS_VERSION 3
 
 typedef struct {
   uint8_t version;
   int8_t car_state;
-  bool has_data, locked, frunk, trunk, climate, defrost;
-  uint8_t battery, charging, charge_limit, seat, units, model;
-  int16_t range, min_to_full, in_temp, out_temp, set_temp;
-  int32_t updated;  // unix time of last real data
+  bool has_data, locked, frunk, trunk, climate, defrost, rear_defrost, wheel, windows, split, can_cool, has_rear;
+  uint8_t battery, charging, charge_limit, units, model;
+  uint8_t seat[5];   // heat 0-3: driver, passenger, rear left, rear centre, rear right
+  uint8_t cool[2];   // cooling 0-3: driver, passenger
+  int16_t range, min_to_full, in_temp, out_temp, set_temp, pass_temp, bearing;
+  int32_t dist;      // metres to car, -1 unknown
+  int32_t updated;
   char name[25];
   char text[41];
 } Status;
@@ -30,10 +34,24 @@ static Status s;
 #define COL_FAINT PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite)
 #define COL_ACCENT PBL_IF_COLOR_ELSE(GColorVeryLightBlue, GColorWhite)
 #define COL_FILL PBL_IF_COLOR_ELSE(GColorBlueMoon, GColorWhite)
+#define COL_ON_FILL PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack)
 #define COL_CARD PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack)
 #define COL_CAR PBL_IF_COLOR_ELSE(GColorLightGray, GColorWhite)
+#define COL_GLASS PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack)
 #define COL_GOOD PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite)
 #define COL_BAD PBL_IF_COLOR_ELSE(GColorRed, GColorWhite)
+#define COL_HEAT PBL_IF_COLOR_ELSE(GColorOrange, GColorWhite)
+#define COL_COOL PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite)
+
+static GFont f14b, f18, f18b, f24b, f28b, f_big;
+
+static void text_at(GContext *ctx, const char *t, GFont f, GRect r, GTextAlignment a, GColor col) {
+  graphics_context_set_text_color(ctx, col);
+  graphics_draw_text(ctx, t, f, r, GTextOverflowModeTrailingEllipsis, a, NULL);
+}
+static int text_w(const char *t, GFont f) {
+  return graphics_text_layout_get_content_size(t, f, GRect(0, 0, 300, 60), GTextOverflowModeFill, GTextAlignmentLeft).w;
+}
 
 // ---------------- toast (progress / result banner) ----------------
 enum { TOAST_NONE, TOAST_PROGRESS, TOAST_OK, TOAST_ERR };
@@ -42,12 +60,12 @@ static char s_toast[41];
 static AppTimer *s_toast_timer;
 static bool s_busy;
 
-static Window *s_main_win, *s_climate_win;
-static Layer *s_main_layer, *s_climate_layer;
+static Layer *s_main_layer, *s_climate_layer, *s_seat_layer;
 
 static void redraw(void) {
   if (s_main_layer) layer_mark_dirty(s_main_layer);
   if (s_climate_layer) layer_mark_dirty(s_climate_layer);
+  if (s_seat_layer) layer_mark_dirty(s_seat_layer);
 }
 static void toast_hide(void *ctx) { s_toast_timer = NULL; s_toast_kind = TOAST_NONE; s_busy = false; redraw(); }
 static void toast(int kind, const char *text, uint32_t ms) {
@@ -58,9 +76,21 @@ static void toast(int kind, const char *text, uint32_t ms) {
   s_toast_timer = app_timer_register(ms, toast_hide, NULL);
   redraw();
 }
+static void draw_toast(GContext *ctx, GRect b) {
+  if (s_toast_kind == TOAST_NONE) return;
+  int w = b.size.w - PBL_IF_ROUND_ELSE(b.size.w / 3, 12), h = 26;
+  int y = b.size.h - h - PBL_IF_ROUND_ELSE(b.size.h / 9, 4);
+  GRect r = GRect((b.size.w - w) / 2, y, w, h);
+  GColor bg = s_toast_kind == TOAST_OK ? COL_FILL : (s_toast_kind == TOAST_ERR ? COL_BAD : PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+  graphics_context_set_fill_color(ctx, bg);
+  graphics_fill_rect(ctx, r, h / 2, GCornersAll);
+  char buf[48];
+  snprintf(buf, sizeof(buf), "%s%s", s_toast, s_toast_kind == TOAST_PROGRESS ? "..." : "");
+  text_at(ctx, buf, f18b, GRect(r.origin.x + 4, r.origin.y + 1, r.size.w - 8, h), GTextAlignmentCenter, PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+}
 
 // ---------------- messaging ----------------
-static void send3(int type, int cmd, int value) {
+static void send3(int type, int cmd, int32_t value) {
   DictionaryIterator *it;
   if (app_message_outbox_begin(&it) != APP_MSG_OK) { toast(TOAST_ERR, "Phone busy", 2000); return; }
   dict_write_int32(it, MESSAGE_KEY_Type, type);
@@ -68,7 +98,7 @@ static void send3(int type, int cmd, int value) {
   dict_write_int32(it, MESSAGE_KEY_Value, value);
   app_message_outbox_send();
 }
-static void send_cmd(int cmd, int value, const char *what) {
+static void send_cmd(int cmd, int32_t value, const char *what) {
   if (s_busy) { vibes_short_pulse(); return; }
   s_busy = true;
   toast(TOAST_PROGRESS, what, 90000);
@@ -85,13 +115,27 @@ static int32_t tint(DictionaryIterator *it, uint32_t key, int32_t def) {
 }
 static void save_status(void) { persist_write_data(PERSIST_STATUS, &s, sizeof(s)); }
 
+// ---------------- charging pulse ----------------
+static AppTimer *s_pulse_timer;
+static bool s_pulse;
+static int s_phase;
+static void pulse_tick(void *ctx) {
+  s_phase = (s_phase + 1) % 12;
+  s_pulse = (s_phase / 3) % 2;
+  if (s_main_layer) layer_mark_dirty(s_main_layer);
+  s_pulse_timer = (s.charging == 2 && s.has_data) ? app_timer_register(250, pulse_tick, NULL) : NULL;
+}
+static void anim_kick(void);
+static void pulse_update(void) {
+  if (s.charging == 2 && s.has_data && !s_pulse_timer) s_pulse_timer = app_timer_register(250, pulse_tick, NULL);
+}
+
 static void inbox(DictionaryIterator *it, void *ctx) {
   int type = tint(it, MESSAGE_KEY_Type, 0);
   Tuple *text = dict_find(it, MESSAGE_KEY_Text);
   if (type == T_STATUS) {
     s.car_state = tint(it, MESSAGE_KEY_CarState, s.car_state);
-    bool has = tint(it, MESSAGE_KEY_HasData, 0);
-    if (has) {
+    if (tint(it, MESSAGE_KEY_HasData, 0)) {
       s.has_data = true;
       s.battery = tint(it, MESSAGE_KEY_Battery, s.battery);
       s.range = tint(it, MESSAGE_KEY_Range, s.range);
@@ -103,19 +147,36 @@ static void inbox(DictionaryIterator *it, void *ctx) {
       s.trunk = tint(it, MESSAGE_KEY_Trunk, s.trunk);
       s.climate = tint(it, MESSAGE_KEY_Climate, s.climate);
       s.defrost = tint(it, MESSAGE_KEY_Defrost, s.defrost);
-      s.seat = tint(it, MESSAGE_KEY_SeatHeat, s.seat);
+      s.rear_defrost = tint(it, MESSAGE_KEY_RearDefrost, s.rear_defrost);
+      s.wheel = tint(it, MESSAGE_KEY_Wheel, s.wheel);
+      s.windows = tint(it, MESSAGE_KEY_Windows, s.windows);
+      s.seat[0] = tint(it, MESSAGE_KEY_SeatHeat, s.seat[0]);
+      s.seat[1] = tint(it, MESSAGE_KEY_SeatR, s.seat[1]);
+      s.seat[2] = tint(it, MESSAGE_KEY_SeatRL, s.seat[2]);
+      s.seat[3] = tint(it, MESSAGE_KEY_SeatRC, s.seat[3]);
+      s.seat[4] = tint(it, MESSAGE_KEY_SeatRR, s.seat[4]);
+      s.has_rear = tint(it, MESSAGE_KEY_HasRear, s.has_rear);
+      s.cool[0] = tint(it, MESSAGE_KEY_CoolL, s.cool[0]);
+      s.cool[1] = tint(it, MESSAGE_KEY_CoolR, s.cool[1]);
+      s.can_cool = tint(it, MESSAGE_KEY_CanCool, s.can_cool);
       s.in_temp = tint(it, MESSAGE_KEY_InTemp, s.in_temp);
       s.out_temp = tint(it, MESSAGE_KEY_OutTemp, s.out_temp);
       s.set_temp = tint(it, MESSAGE_KEY_SetTemp, s.set_temp);
+      s.pass_temp = tint(it, MESSAGE_KEY_PassTemp, s.pass_temp);
       s.units = tint(it, MESSAGE_KEY_Units, s.units);
       s.model = tint(it, MESSAGE_KEY_Model, s.model);
+      s.dist = tint(it, MESSAGE_KEY_Dist, s.dist);
+      s.bearing = tint(it, MESSAGE_KEY_Bearing, s.bearing);
       s.updated = time(NULL) - tint(it, MESSAGE_KEY_Age, 0);
     }
+    s.split = tint(it, MESSAGE_KEY_Split, s.split);
     Tuple *name = dict_find(it, MESSAGE_KEY_CarName);
     if (name && name->value->cstring[0]) { strncpy(s.name, name->value->cstring, sizeof(s.name) - 1); }
     strncpy(s.text, text ? text->value->cstring : "", sizeof(s.text) - 1);
     if (s_toast_kind == TOAST_PROGRESS && !s_busy && s.car_state != S_BUSY) toast_hide(NULL);
     save_status();
+    pulse_update();
+    anim_kick();
   } else if (type == T_PROGRESS) {
     toast(TOAST_PROGRESS, text ? text->value->cstring : "Working", 90000);
   } else if (type == T_RESULT) {
@@ -127,102 +188,227 @@ static void inbox(DictionaryIterator *it, void *ctx) {
   redraw();
 }
 
-// ---------------- temperature helpers ----------------
+// ---------------- temperature & distance helpers ----------------
 static bool is_f(void) { return s.units & 1; }
+static bool is_mi(void) { return s.units & 2; }
 static int c10_to_disp(int c10) {  // F: whole degrees. C: tenths
   if (is_f()) return (c10 * 9 + (c10 >= 0 ? 25 : -25)) / 50 + 32;
   return c10;
 }
-static void fmt_temp(char *buf, size_t n, int c10, bool deg) {
+static void fmt_temp(char *buf, size_t n, int c10) {
   if (c10 == NO_TEMP) { snprintf(buf, n, "--"); return; }
   int v = c10_to_disp(c10);
-  if (is_f()) snprintf(buf, n, deg ? "%d°" : "%d", v);
-  else if (v % 10 == 0) snprintf(buf, n, deg ? "%d°" : "%d", v / 10);
-  else snprintf(buf, n, deg ? "%d.%d°" : "%d.%d", v / 10, abs(v % 10));
+  if (is_f()) snprintf(buf, n, "%d°", v);
+  else if (v % 10 == 0) snprintf(buf, n, "%d°", v / 10);
+  else snprintf(buf, n, "%d.%d°", v / 10, abs(v % 10));
 }
-
-// ---------------- drawing helpers ----------------
-static GFont f14b, f18, f18b, f24b, f28b, f_big;
-
-// Side profile of a crossover, facing left, in a 100 x 30 box.
-static const int16_t CAR_TPL[][2] = {
-  {3, 27}, {0, 21}, {2, 15}, {27, 10}, {43, 2}, {68, 1}, {87, 8}, {98, 11}, {100, 20}, {98, 27}
-};
-static const int16_t WIN_TPL[][2] = { {31, 10}, {45, 4}, {66, 3}, {82, 9} };
-
-static GPoint tp(GRect r, int x, int y) { return GPoint(r.origin.x + x * r.size.w / 100, r.origin.y + y * r.size.h / 30); }
-
-static void fill_poly(GContext *ctx, GRect r, const int16_t (*tpl)[2], int n) {
-  GPoint pts[12];
-  for (int i = 0; i < n; i++) pts[i] = tp(r, tpl[i][0], tpl[i][1]);
-  GPathInfo info = { .num_points = n, .points = pts };
-  GPath *p = gpath_create(&info);
-  gpath_draw_filled(ctx, p);
-  gpath_destroy(p);
-}
-
-// Draw the car. r is the 100x30 template box.
-static void draw_car(GContext *ctx, GRect r, bool frunk, bool trunk, bool mini, GColor body, GColor lid, GColor bg) {
-  int wr = r.size.h * 6 / 30 + 1;
-  graphics_context_set_fill_color(ctx, body);
-  fill_poly(ctx, r, CAR_TPL, 10);
-  if (!mini) {
-    graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorBlack));
-    fill_poly(ctx, r, WIN_TPL, 4);
+static void fmt_dist(char *buf, size_t n) {
+  static const char *dirs[] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+  buf[0] = 0;
+  if (s.dist < 0 || !s.has_data) return;
+  const char *dir = dirs[((s.bearing + 22) / 45) % 8];
+  if (s.dist < 25) { snprintf(buf, n, "At car"); return; }
+  if (is_mi()) {
+    int ft = s.dist * 3281 / 1000;
+    if (ft < 1000) snprintf(buf, n, "%d ft %s", (ft + 5) / 10 * 10, dir);
+    else {
+      int mi10 = (s.dist * 10 + 804) / 1609;
+      if (mi10 < 100) snprintf(buf, n, "%d.%d mi %s", mi10 / 10, mi10 % 10, dir);
+      else snprintf(buf, n, "%d mi %s", mi10 / 10, dir);
+    }
+  } else {
+    if (s.dist < 1000) snprintf(buf, n, "%d m %s", (int)((s.dist + 5) / 10 * 10), dir);
+    else {
+      int km10 = (s.dist + 50) / 100;
+      if (km10 < 100) snprintf(buf, n, "%d.%d km %s", km10 / 10, km10 % 10, dir);
+      else snprintf(buf, n, "%d km %s", km10 / 10, dir);
+    }
   }
-  // wheels: cut a black arch then draw the tyre
-  GPoint w1 = tp(r, 21, 27), w2 = tp(r, 79, 27);
-  graphics_context_set_fill_color(ctx, bg);
-  graphics_fill_circle(ctx, w1, wr + (mini ? 1 : 2));
-  graphics_fill_circle(ctx, w2, wr + (mini ? 1 : 2));
-  graphics_context_set_fill_color(ctx, mini ? body : PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+}
+
+// ---------------- car side profiles ----------------
+// Each model is drawn in a 100-wide box; heights differ. Facing left.
+typedef struct {
+  uint8_t h, n, wn;
+  int8_t pts[13][2];
+  int8_t win[7][2];
+  int8_t wf[2], wr[2], wrad;
+  int8_t fh[2], fo[2], th[2], to[2];  // frunk hinge/open tip, trunk hinge/open tip
+  int8_t port[2];                     // charge port (driver side, rear)
+} CarModel;
+
+static const CarModel MODELS[] = {
+  // 0 Model 3 (default; traced from a 2024+ Model 3 side view)
+  { 31, 13, 7, {{0,27},{0,18},{6,13},{30,10},{44,2},{52,0},{63,0},{74,2},{85,5},{99,8},{100,12},{100,21},{98,27}},
+    {{31,10},{43,2},{60,1},{74,3},{84,6},{80,8},{34,10}}, {17,24}, {82,24}, 7, {30,10}, {10,-3}, {85,5}, {95,-6}, {91,10} },
+  // 1 Model S
+  { 30, 11, 6, {{0,26},{0,18},{6,14},{31,10},{47,1},{63,0},{83,4},{97,8},{100,12},{100,21},{98,26}},
+    {{33,10},{48,2},{63,1},{82,4},{86,8},{35,10}}, {16,23}, {81,23}, 7, {31,10}, {11,-3}, {64,1}, {94,-8}, {92,10} },
+  // 2 Model 3 (same as 0)
+  { 31, 13, 7, {{0,27},{0,18},{6,13},{30,10},{44,2},{52,0},{63,0},{74,2},{85,5},{99,8},{100,12},{100,21},{98,27}},
+    {{31,10},{43,2},{60,1},{74,3},{84,6},{80,8},{34,10}}, {17,24}, {82,24}, 7, {30,10}, {10,-3}, {85,5}, {95,-6}, {91,10} },
+  // 3 Model X
+  { 35, 11, 6, {{0,29},{0,20},{5,15},{27,10},{43,1},{70,0},{87,4},{97,10},{100,15},{100,25},{98,29}},
+    {{29,10},{44,2},{69,1},{85,5},{90,10},{31,11}}, {17,27}, {82,27}, 8, {27,10}, {8,-3}, {72,0}, {98,-9}, {91,12} },
+  // 4 Model Y
+  { 33, 11, 6, {{0,28},{0,19},{5,14},{29,10},{44,1},{66,0},{83,3},{96,9},{100,13},{100,24},{98,28}},
+    {{31,10},{45,2},{65,1},{81,4},{88,9},{33,10}}, {17,25}, {82,25}, 8, {29,10}, {10,-2}, {80,2}, {99,-7}, {91,11} },
+  // 5 Cybertruck
+  { 31, 7, 5, {{0,27},{0,17},{3,15},{46,0},{100,11},{100,23},{98,27}},
+    {{31,6},{46,1},{60,4},{58,9},{33,9}}, {17,24}, {81,24}, 8, {28,6}, {8,-3}, {100,11}, {100,-2}, {90,13} },
+};
+// ---- Model 3 pixel-art frames (resources generated by tools/make_assets.py) ----
+static const uint32_t TRUNK_RES[8] = { RESOURCE_ID_TRUNK_0, RESOURCE_ID_TRUNK_1, RESOURCE_ID_TRUNK_2, RESOURCE_ID_TRUNK_3,
+  RESOURCE_ID_TRUNK_4, RESOURCE_ID_TRUNK_5, RESOURCE_ID_TRUNK_6, RESOURCE_ID_TRUNK_7 };
+static const uint32_t FRUNK_RES[8] = { RESOURCE_ID_FRUNK_0, RESOURCE_ID_FRUNK_1, RESOURCE_ID_FRUNK_2, RESOURCE_ID_FRUNK_3,
+  RESOURCE_ID_FRUNK_4, RESOURCE_ID_FRUNK_5, RESOURCE_ID_FRUNK_6, RESOURCE_ID_FRUNK_7 };
+static GBitmap *s_bmp[2];
+static uint32_t s_bmp_id[2];
+static GBitmap *bmp_get(int slot, uint32_t id) {
+  if (s_bmp[slot] && s_bmp_id[slot] == id) return s_bmp[slot];
+  if (s_bmp[slot]) gbitmap_destroy(s_bmp[slot]);
+  s_bmp[slot] = gbitmap_create_with_resource(id);
+  s_bmp_id[slot] = id;
+  return s_bmp[slot];
+}
+static bool use_sprites(void) { return s.model == 0 || s.model == 2; }
+
+// Lid animation: frame 0 = closed, 7 = fully open.
+static int s_fr_frame, s_tr_frame;         // what is on screen now
+static AppTimer *s_anim_timer;
+static void anim_tick(void *ctx) {
+  s_anim_timer = NULL;
+  int ft = (s.frunk && s.has_data) ? 7 : 0, tt = (s.trunk && s.has_data) ? 7 : 0;
+  bool more = false;
+  if (s_fr_frame != ft) { s_fr_frame += ft > s_fr_frame ? 1 : -1; more = true; }
+  else if (s_tr_frame != tt) { s_tr_frame += tt > s_tr_frame ? 1 : -1; more = true; }
+  if (s_main_layer) layer_mark_dirty(s_main_layer);
+  if (more) s_anim_timer = app_timer_register(70, anim_tick, NULL);
+}
+static void anim_kick(void) { if (!s_anim_timer) s_anim_timer = app_timer_register(30, anim_tick, NULL); }
+
+static const CarModel *car_model(void) { return &MODELS[s.model < 6 ? s.model : 0]; }
+
+static GPoint cp(GRect r, int x, int y, int h) { return GPoint(r.origin.x + x * r.size.w / 100, r.origin.y + y * r.size.h / h); }
+static void fill_pts(GContext *ctx, GRect r, const int8_t (*pts)[2], int n, int h) {
+  GPoint p[13];
+  for (int i = 0; i < n; i++) p[i] = cp(r, pts[i][0], pts[i][1], h);
+  GPathInfo info = { .num_points = n, .points = p };
+  GPath *path = gpath_create(&info);
+  gpath_draw_filled(ctx, path);
+  gpath_destroy(path);
+}
+// r: box whose height must be width * model.h / 100
+static void draw_car(GContext *ctx, GRect r, const CarModel *m, bool frunk, bool trunk, bool charging, int phase) {
+  int wr = m->wrad * r.size.w / 100;
+  graphics_context_set_fill_color(ctx, COL_CAR);
+  fill_pts(ctx, r, m->pts, m->n, m->h);
+  graphics_context_set_fill_color(ctx, COL_GLASS);
+  fill_pts(ctx, r, m->win, m->wn, m->h);
+  GPoint w1 = cp(r, m->wf[0], m->wf[1], m->h), w2 = cp(r, m->wr[0], m->wr[1], m->h);
+  graphics_context_set_fill_color(ctx, COL_BG);
+  graphics_fill_circle(ctx, w1, wr + 2);
+  graphics_fill_circle(ctx, w2, wr + 2);
+  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
   graphics_fill_circle(ctx, w1, wr);
   graphics_fill_circle(ctx, w2, wr);
-  if (!mini) {
-    graphics_context_set_fill_color(ctx, COL_BG);
-    graphics_fill_circle(ctx, w1, wr / 2);
-    graphics_fill_circle(ctx, w2, wr / 2);
+  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorLightGray, GColorBlack));
+  graphics_fill_circle(ctx, w1, wr * 5 / 10);
+  graphics_fill_circle(ctx, w2, wr * 5 / 10);
+  graphics_context_set_fill_color(ctx, PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
+  graphics_fill_circle(ctx, w1, wr * 2 / 10);
+  graphics_fill_circle(ctx, w2, wr * 2 / 10);
+  if (charging) {
+    // Cord from the ground up into the charge port; green pulses climb toward the car.
+    GPoint pts[4] = { cp(r, 106, m->h + 1, m->h), cp(r, 104, m->h - 4, m->h), cp(r, 98, m->port[1] + 5, m->h), cp(r, m->port[0], m->port[1], m->h) };
+    graphics_context_set_stroke_width(ctx, 3);
+    for (int i = 0; i < 3; i++) {
+      bool lit = (phase % 3) == i;
+      graphics_context_set_stroke_color(ctx, lit ? PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite) : PBL_IF_COLOR_ELSE(GColorDarkGreen, GColorWhite));
+#ifdef PBL_BW
+      if (!lit && (phase / 3) % 2) continue;
+#endif
+      graphics_draw_line(ctx, pts[i], pts[i + 1]);
+    }
+    graphics_context_set_fill_color(ctx, (phase % 3) == 2 ? PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite) : PBL_IF_COLOR_ELSE(GColorIslamicGreen, GColorWhite));
+    graphics_fill_circle(ctx, pts[3], 2);
   }
-  // open lids in blue
-  graphics_context_set_stroke_color(ctx, lid);
-  graphics_context_set_stroke_width(ctx, mini ? 2 : 3);
+  // dark gap under an open lid, so it reads as open
+  graphics_context_set_fill_color(ctx, COL_BG);
   if (frunk) {
-    graphics_context_set_fill_color(ctx, bg);
-    graphics_fill_rect(ctx, GRect(tp(r, 3, 9).x, tp(r, 0, 9).y, tp(r, 26, 0).x - tp(r, 3, 0).x, tp(r, 0, 16).y - tp(r, 0, 9).y), 0, GCornerNone);
-    graphics_draw_line(ctx, tp(r, 27, 10), tp(r, mini ? 4 : 6, mini ? -16 : -2));
+    GPoint g[3] = { cp(r, m->fh[0], m->fh[1], m->h), cp(r, m->pts[2][0], m->pts[2][1], m->h), cp(r, m->fo[0], m->fo[1] + 2, m->h) };
+    GPathInfo gi = { .num_points = 3, .points = g }; GPath *gp = gpath_create(&gi); gpath_draw_filled(ctx, gp); gpath_destroy(gp);
   }
-  if (trunk) {
-    graphics_draw_line(ctx, tp(r, 70, 1), tp(r, mini ? 94 : 97, mini ? -20 : -6));
+  graphics_context_set_stroke_color(ctx, COL_ACCENT);
+  graphics_context_set_stroke_width(ctx, 3);
+  if (frunk) graphics_draw_line(ctx, cp(r, m->fh[0], m->fh[1], m->h), cp(r, m->fo[0], m->fo[1], m->h));
+  if (trunk) graphics_draw_line(ctx, cp(r, m->th[0], m->th[1], m->h), cp(r, m->to[0], m->to[1], m->h));
+}
+
+// ---------------- line-art icons (2px) ----------------
+static void line2(GContext *ctx, GPoint a, GPoint b) { graphics_draw_line(ctx, a, b); }
+static GPoint ip(GPoint c, int x, int y, int s) { return GPoint(c.x + (x - 12) * s / 24, c.y + (y - 6) * s / 24); }
+
+// Small filled car silhouette (24 x 10 grid, facing left) with the frunk or trunk lid raised.
+static void icon_lid(GContext *ctx, GPoint c, int s, bool front, GColor col, GColor bg) {
+  static const int8_t body[8][2] = { {0,11},{0,7},{7,6},{10,2},{16,2},{20,5},{24,6},{24,11} };
+  GPoint p[8];
+  for (int i = 0; i < 8; i++) p[i] = ip(c, body[i][0], body[i][1], s);
+  GPathInfo info = { .num_points = 8, .points = p };
+  GPath *path = gpath_create(&info);
+  graphics_context_set_fill_color(ctx, col);
+  gpath_draw_filled(ctx, path);
+  gpath_destroy(path);
+  // wheels sit in arches at the bottom edge
+  int wr = s / 12 + 1;
+  graphics_context_set_fill_color(ctx, bg);
+  graphics_fill_circle(ctx, ip(c, 5, 11, s), wr + 1);
+  graphics_fill_circle(ctx, ip(c, 19, 11, s), wr + 1);
+  graphics_context_set_fill_color(ctx, col);
+  graphics_fill_circle(ctx, ip(c, 5, 11, s), wr - 1 > 1 ? wr - 1 : 1);
+  graphics_fill_circle(ctx, ip(c, 19, 11, s), wr - 1 > 1 ? wr - 1 : 1);
+  graphics_context_set_stroke_width(ctx, 2);
+  if (front) {
+    // cut away the closed hood, then draw it swung up from the windshield
+    graphics_context_set_stroke_color(ctx, bg);
+    line2(ctx, ip(c, 0, 7, s), ip(c, 7, 6, s));
+    graphics_context_set_stroke_color(ctx, col);
+    line2(ctx, ip(c, 8, 6, s), ip(c, 2, 0, s));
+  } else {
+    graphics_context_set_stroke_color(ctx, bg);
+    line2(ctx, ip(c, 17, 3, s), ip(c, 24, 6, s));
+    graphics_context_set_stroke_color(ctx, col);
+    line2(ctx, ip(c, 16, 3, s), ip(c, 24, -1, s));
   }
 }
 
-static void draw_lock(GContext *ctx, GPoint c, int sz, bool locked, GColor col, GColor bg) {
-  int w = sz, h = sz * 3 / 4;
-  GRect body = GRect(c.x - w / 2, c.y - h / 2 + sz / 5, w, h);
+static void icon_lock(GContext *ctx, GPoint c, int s, bool locked, GColor col, GColor bg) {
+  int w = s * 7 / 10, h = s * 5 / 10;
+  GRect body = GRect(c.x - w / 2, c.y - h / 2 + s / 6, w, h);
   graphics_context_set_stroke_color(ctx, col);
   graphics_context_set_stroke_width(ctx, 2);
-  int sw = w * 6 / 10;
-  GRect shackle = GRect(c.x - sw / 2, body.origin.y - sz / 2 - (locked ? 0 : sz / 5), sw, sz);
+  int sw = w * 6 / 10, sh = s * 6 / 10;
+  GRect shackle = GRect(c.x - sw / 2, body.origin.y - sh / 2 - (locked ? 0 : s / 6), sw, sh);
   graphics_draw_round_rect(ctx, shackle, sw / 2);
-  if (!locked) {  // gap on right leg
+  if (!locked) {
     graphics_context_set_fill_color(ctx, bg);
-    graphics_fill_rect(ctx, GRect(shackle.origin.x + sw - 2, body.origin.y - sz / 4, 4, sz / 4), 0, GCornerNone);
+    graphics_fill_rect(ctx, GRect(shackle.origin.x + sw - 2, body.origin.y - s / 5, 4, s / 5), 0, GCornerNone);
   }
   graphics_context_set_fill_color(ctx, col);
   graphics_fill_rect(ctx, body, 2, GCornersAll);
   graphics_context_set_fill_color(ctx, bg);
-  graphics_fill_circle(ctx, GPoint(c.x, body.origin.y + h / 2), 1);
+  graphics_fill_rect(ctx, GRect(c.x - 1, body.origin.y + h / 2 - 2, 2, 4), 0, GCornerNone);
 }
 
 static GPoint polar(GPoint c, int32_t a, int d) {
   return GPoint(c.x + sin_lookup(a) * d / TRIG_MAX_RATIO, c.y - cos_lookup(a) * d / TRIG_MAX_RATIO);
 }
-static void draw_fan(GContext *ctx, GPoint c, int sz, GColor col) {
-  int R = sz / 2;
+static void icon_fan(GContext *ctx, GPoint c, int s, GColor col) {
+  int R = s / 2;
   graphics_context_set_fill_color(ctx, col);
+  int32_t deg = TRIG_MAX_ANGLE / 360;
   for (int i = 0; i < 3; i++) {
     int32_t a = i * TRIG_MAX_ANGLE / 3;
-    int32_t deg = TRIG_MAX_ANGLE / 360;
     GPoint pts[5] = { polar(c, a - 25 * deg, 2), polar(c, a - 12 * deg, R), polar(c, a + 18 * deg, R + 1),
                       polar(c, a + 50 * deg, R * 2 / 3), polar(c, a + 40 * deg, 2) };
     GPathInfo info = { .num_points = 5, .points = pts };
@@ -230,227 +416,101 @@ static void draw_fan(GContext *ctx, GPoint c, int sz, GColor col) {
     gpath_draw_filled(ctx, p);
     gpath_destroy(p);
   }
-  graphics_fill_circle(ctx, c, 3);
+  graphics_fill_circle(ctx, c, 2);
 }
 
-static void draw_dots(GContext *ctx, GPoint c, int sz, GColor col) {
+// Heat waves: n wavy lines (2px), like Tesla's seat-heat symbol.
+static void icon_heat(GContext *ctx, GPoint c, int s, int n, GColor col) {
+  graphics_context_set_stroke_color(ctx, col);
+  graphics_context_set_stroke_width(ctx, 2);
+  int gap = s * 4 / 10 > 4 ? s * 4 / 10 : 4, h = s * 7 / 10;
+  if (h < 8) h = 8;
+  static const int8_t wave[5] = { 0, 2, 0, -2, 0 };
+  for (int i = 0; i < n; i++) {
+    int x = c.x + i * gap - (n - 1) * gap / 2;
+    int y0 = c.y - h / 2;
+    for (int k = 0; k < 4; k++)
+      line2(ctx, GPoint(x + wave[k], y0 + k * h / 4), GPoint(x + wave[k + 1], y0 + (k + 1) * h / 4));
+  }
+}
+// Cooling: n small snow stars
+static void icon_cool(GContext *ctx, GPoint c, int s, int n, GColor col) {
+  graphics_context_set_stroke_color(ctx, col);
+  graphics_context_set_stroke_width(ctx, 1);
+  int gap = s / 3, r = s / 7 + 1;
+  for (int i = 0; i < n; i++) {
+    GPoint p = GPoint(c.x + (i - (n - 1) / 2) * gap - ((n % 2) ? 0 : gap / 2), c.y);
+    graphics_draw_line(ctx, GPoint(p.x - r, p.y), GPoint(p.x + r, p.y));
+    graphics_draw_line(ctx, GPoint(p.x, p.y - r), GPoint(p.x, p.y + r));
+    graphics_draw_line(ctx, GPoint(p.x - r + 1, p.y - r + 1), GPoint(p.x + r - 1, p.y + r - 1));
+    graphics_draw_line(ctx, GPoint(p.x - r + 1, p.y + r - 1), GPoint(p.x + r - 1, p.y - r + 1));
+  }
+}
+
+static void icon_bolt(GContext *ctx, GPoint c, int s, GColor col) {
+  GPoint pts[6] = { GPoint(c.x + s / 5, c.y - s / 2), GPoint(c.x - s / 3, c.y + s / 10), GPoint(c.x, c.y + s / 10),
+                    GPoint(c.x - s / 5, c.y + s / 2), GPoint(c.x + s / 3, c.y - s / 10), GPoint(c.x, c.y - s / 10) };
+  GPathInfo info = { .num_points = 6, .points = pts };
+  GPath *p = gpath_create(&info);
   graphics_context_set_fill_color(ctx, col);
-  for (int i = -1; i <= 1; i++) graphics_fill_circle(ctx, GPoint(c.x + i * sz / 3, c.y), 2);
+  gpath_draw_filled(ctx, p);
+  gpath_destroy(p);
 }
 
-static void draw_battery(GContext *ctx, GRect r, int pct, bool charging) {
-  graphics_context_set_stroke_color(ctx, COL_DIM);
+static void draw_battery(GContext *ctx, GRect r, int pct, bool charging, bool pulse) {
+  graphics_context_set_stroke_color(ctx, charging ? COL_GOOD : COL_DIM);
   graphics_context_set_stroke_width(ctx, 1);
   graphics_draw_round_rect(ctx, r, 2);
-  graphics_context_set_fill_color(ctx, COL_DIM);
+  graphics_context_set_fill_color(ctx, charging ? COL_GOOD : COL_DIM);
   graphics_fill_rect(ctx, GRect(r.origin.x + r.size.w, r.origin.y + r.size.h / 3, 2, r.size.h / 3), 0, GCornerNone);
   int fw = (r.size.w - 4) * pct / 100;
   if (fw < 1 && pct > 0) fw = 1;
-  graphics_context_set_fill_color(ctx, charging ? COL_GOOD : (pct <= 20 ? COL_BAD : COL_TEXT));
-  graphics_fill_rect(ctx, GRect(r.origin.x + 2, r.origin.y + 2, fw, r.size.h - 4), 1, GCornersAll);
-}
-
-static void text_at(GContext *ctx, const char *t, GFont f, GRect r, GTextAlignment a, GColor col) {
-  graphics_context_set_text_color(ctx, col);
-  graphics_draw_text(ctx, t, f, r, GTextOverflowModeTrailingEllipsis, a, NULL);
-}
-
-static void draw_toast(GContext *ctx, GRect b) {
-  if (s_toast_kind == TOAST_NONE) return;
-  int w = b.size.w - PBL_IF_ROUND_ELSE(b.size.w / 3, 12), h = 26;
-  int y = b.size.h - h - PBL_IF_ROUND_ELSE(b.size.h / 9, 4);
-  GRect r = GRect((b.size.w - w) / 2, y, w, h);
-  GColor bg = s_toast_kind == TOAST_OK ? COL_FILL : (s_toast_kind == TOAST_ERR ? COL_BAD : PBL_IF_COLOR_ELSE(GColorDarkGray, GColorWhite));
-  GColor fg = PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack);
-  graphics_context_set_fill_color(ctx, bg);
-  graphics_fill_rect(ctx, r, h / 2, GCornersAll);
-  char buf[48];
-  snprintf(buf, sizeof(buf), "%s%s", s_toast, s_toast_kind == TOAST_PROGRESS ? "..." : "");
-  text_at(ctx, buf, f18b, GRect(r.origin.x + 4, r.origin.y + 1, r.size.w - 8, h), GTextAlignmentCenter, fg);
-}
-
-// ---------------- main screen ----------------
-enum { B_LOCK, B_CLIMATE, B_FRUNK, B_TRUNK, B_MORE, B_COUNT };
-static int s_sel = B_LOCK;
-
-static const char *state_label(void) {
-  switch (s.car_state) {
-    case S_ONLINE: return s.charging == 2 ? "Charging" : "Parked";
-    case S_ASLEEP: return "Asleep";
-    case S_OFFLINE: return "Offline";
-    case S_SETUP: return "Setup";
-    case S_PAIR: return "Pair key";
-    case S_BUSY: return "Updating";
-    case S_ERROR: return "Error";
-    default: return "";
-  }
-}
-static GColor state_color(void) {
-  switch (s.car_state) {
-    case S_ONLINE: return s.charging == 2 ? COL_GOOD : COL_ACCENT;
-    case S_ERROR: case S_PAIR: case S_SETUP: return COL_BAD;
-    default: return COL_FAINT;
-  }
-}
-static const char *button_label(int b) {
-  switch (b) {
-    case B_LOCK: return s.locked ? "Locked" : "Unlocked";
-    case B_CLIMATE: return s.climate ? (s.defrost ? "Defrosting" : "Climate on") : "Climate off";
-    case B_FRUNK: return s.frunk ? "Frunk open" : "Open frunk";
-    case B_TRUNK: return s.trunk ? "Trunk open" : "Open trunk";
-    default: return "More";
-  }
-}
-static bool button_active(int b) {
-  switch (b) {
-    case B_LOCK: return !s.locked;
-    case B_CLIMATE: return s.climate;
-    case B_FRUNK: return s.frunk;
-    case B_TRUNK: return s.trunk;
-    default: return false;
-  }
-}
-
-static void draw_button(GContext *ctx, GPoint c, int r, int b, bool sel) {
-  bool active = button_active(b) && s.has_data;
-  GColor bg = sel ? COL_FILL : COL_CARD;
-  GColor fg = sel ? PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack) : (active ? COL_ACCENT : COL_TEXT);
-  graphics_context_set_fill_color(ctx, bg);
-  graphics_fill_circle(ctx, c, r);
+  GColor fill = pct <= 20 ? COL_BAD : COL_TEXT;
+  if (charging) fill = PBL_IF_COLOR_ELSE(pulse ? GColorGreen : GColorIslamicGreen, GColorWhite);
+  graphics_context_set_fill_color(ctx, fill);
+  graphics_fill_rect(ctx, GRect(r.origin.x + 2, r.origin.y + 2, charging ? r.size.w - 4 : fw, r.size.h - 4), 1, GCornersAll);
+  if (charging) {
+    GPoint c = grect_center_point(&r);
 #ifdef PBL_BW
-  if (!sel) { graphics_context_set_stroke_color(ctx, GColorWhite); graphics_context_set_stroke_width(ctx, 1); graphics_draw_circle(ctx, c, r); }
+    if (!pulse) { graphics_context_set_fill_color(ctx, GColorBlack); graphics_fill_rect(ctx, GRect(r.origin.x + 2, r.origin.y + 2, r.size.w - 4, r.size.h - 4), 1, GCornersAll); }
+    icon_bolt(ctx, c, r.size.h + 2, pulse ? GColorBlack : GColorWhite);
+#else
+    icon_bolt(ctx, c, r.size.h + 2, GColorBlack);
 #endif
-  int sz = r;
-  switch (b) {
-    case B_LOCK: draw_lock(ctx, c, sz * 3 / 4, s.locked || !s.has_data, fg, bg); break;
-    case B_CLIMATE: draw_fan(ctx, c, sz + 7, fg); break;
-    case B_FRUNK: case B_TRUNK: {
-      int w = sz * 17 / 10, h = w * 30 / 100;
-      GRect cr = GRect(c.x - w / 2, c.y - h / 2 + 4, w, h);
-      draw_car(ctx, cr, b == B_FRUNK, b == B_TRUNK, true, fg, fg, bg);
-      break;
-    }
-    default: draw_dots(ctx, c, sz + 2, fg); break;
-  }
-  if (active && !sel) {
-    graphics_context_set_fill_color(ctx, COL_ACCENT);
-    graphics_fill_circle(ctx, GPoint(c.x, c.y + r + 4), 2);
   }
 }
 
-static void main_update(Layer *layer, GContext *ctx) {
-  GRect b = layer_get_bounds(layer);
-  int W = b.size.w, H = b.size.h;
-  bool round = PBL_IF_ROUND_ELSE(true, false);
-  bool large = W >= 200;
-  graphics_context_set_fill_color(ctx, COL_BG);
-  graphics_fill_rect(ctx, b, 0, GCornerNone);
-
-  // --- header: car name + state ---
-  int hy = round ? H / 14 : 1;
-  char hdr[48];
-  const char *st = state_label();
-  if (round) {
-    text_at(ctx, s.name[0] ? s.name : "Tesla", f14b, GRect(W / 5, hy, W * 3 / 5, 18), GTextAlignmentCenter, COL_TEXT);
-    snprintf(hdr, sizeof(hdr), "%s", st);
-    text_at(ctx, hdr, f14b, GRect(W / 5, hy + 15, W * 3 / 5, 18), GTextAlignmentCenter, state_color());
-  } else {
-    GSize ss = graphics_text_layout_get_content_size(st, f14b, GRect(0, 0, W, 18), GTextOverflowModeFill, GTextAlignmentRight);
-    text_at(ctx, s.name[0] ? s.name : "Tesla", f14b, GRect(4, hy, W - ss.w - 22, 18), GTextAlignmentLeft, COL_TEXT);
-    text_at(ctx, st, f14b, GRect(W - 4 - ss.w, hy, ss.w + 2, 18), GTextAlignmentRight, state_color());
-    graphics_context_set_fill_color(ctx, state_color());
-    graphics_fill_circle(ctx, GPoint(W - 10 - ss.w, hy + 10), 3);
-  }
-
-  // --- car ---
-  int cw = round ? W * (large ? 52 : 58) / 100 : W * 72 / 100;
-  int ch = cw * 30 / 100;
-  int cy = round ? H * 32 / 100 : (large ? 36 : 28);
-  GRect car = GRect((W - cw) / 2, cy, cw, ch);
-  draw_car(ctx, car, s.frunk && s.has_data, s.trunk && s.has_data, false, COL_CAR, COL_ACCENT, COL_BG);
-  // lock badge next to the car
-  draw_lock(ctx, GPoint(car.origin.x + cw / 2, cy - (large ? 8 : 6)), large ? 9 : 7, s.locked || !s.has_data,
-            s.locked || !s.has_data ? COL_DIM : COL_ACCENT, COL_BG);
-
-  // --- battery + range ---
-  int ry = cy + ch + ch / 8 + (round ? 2 : (large ? 6 : 3));
-  char num[16], unit[8];
-  if (s.has_data) snprintf(num, sizeof(num), "%d", s.range); else snprintf(num, sizeof(num), "--");
-  snprintf(unit, sizeof(unit), "%s", (s.units & 2) ? "mi" : "km");
-  GFont nf = large ? f28b : f24b;
-  GSize ns = graphics_text_layout_get_content_size(num, nf, GRect(0, 0, W, 40), GTextOverflowModeFill, GTextAlignmentLeft);
-  GSize us = graphics_text_layout_get_content_size(unit, f18, GRect(0, 0, W, 30), GTextOverflowModeFill, GTextAlignmentLeft);
-  int bw = large ? 26 : 20, bh = large ? 12 : 10;
-  char pct[8];
-  snprintf(pct, sizeof(pct), "%d%%", s.battery);
-  GSize ps = graphics_text_layout_get_content_size(pct, f14b, GRect(0, 0, W, 20), GTextOverflowModeFill, GTextAlignmentLeft);
-  int total = ns.w + 2 + us.w + 10 + bw + 4 + ps.w;
-  int x = (W - total) / 2;
-  int nh = large ? 28 : 24;
-  text_at(ctx, num, nf, GRect(x, ry - nh / 4 - 2, ns.w + 2, nh + 8), GTextAlignmentLeft, COL_TEXT);
-  x += ns.w + 2;
-  text_at(ctx, unit, f18, GRect(x, ry + 2, us.w + 2, 22), GTextAlignmentLeft, COL_DIM);
-  x += us.w + 10;
-  int by = ry + nh / 2 - bh / 2 + 1;
-  draw_battery(ctx, GRect(x, by, bw, bh), s.has_data ? s.battery : 0, s.charging == 2);
-  x += bw + 4;
-  text_at(ctx, pct, f14b, GRect(x, by - 5, ps.w + 2, 18), GTextAlignmentLeft, COL_DIM);
-
-  // --- control row ---
-  int r = large ? 16 : 13;
-  int rowy = round ? H * 72 / 100 : H - (large ? 62 : 46);
-  int span = round ? W * 74 / 100 : W - 2 * (r + 3);
-  for (int i = 0; i < B_COUNT; i++) {
-    int cx = (W - span) / 2 + span * i / (B_COUNT - 1);
-    draw_button(ctx, GPoint(cx, rowy), r, i, i == s_sel);
-  }
-
-  // --- label for selected control / status text ---
-  int ly = rowy + r + (large ? 10 : 6);
-  const char *lbl = button_label(s_sel);
-  char agebuf[32] = "";
-  if (s.car_state == S_SETUP || s.car_state == S_PAIR || s.car_state == S_ERROR) lbl = s.text[0] ? s.text : lbl;
-  text_at(ctx, lbl, f18b, GRect(round ? W / 6 : 2, ly, round ? W * 2 / 3 : W - 4, 22), GTextAlignmentCenter, COL_TEXT);
-  if (!round && s.car_state == S_ASLEEP && s.updated) {
-    int mins = (time(NULL) - s.updated) / 60;
-    if (mins < 60) snprintf(agebuf, sizeof(agebuf), "Updated %dm ago", mins);
-    else if (mins < 60 * 48) snprintf(agebuf, sizeof(agebuf), "Updated %dh ago", mins / 60);
-    else snprintf(agebuf, sizeof(agebuf), "Updated %dd ago", mins / 1440);
-    if (ly + 40 <= H) text_at(ctx, agebuf, f14b, GRect(2, ly + 19, W - 4, 18), GTextAlignmentCenter, COL_FAINT);
-  }
-  draw_toast(ctx, b);
-}
-
-// ---------------- generic dark menu (More / climate options) ----------------
+// ---------------- generic dark menu ----------------
 typedef void (*MenuPick)(int row);
 typedef struct { const char *title; int rows; const char *(*row_title)(int); const char *(*row_sub)(int); MenuPick pick; } MenuSpec;
 static MenuSpec s_menu_spec;
 static Window *s_menu_win;
 static MenuLayer *s_menu;
 
-static uint16_t m_rows(MenuLayer *m, uint16_t sec, void *ctx) { return s_menu_spec.rows; }
-static void m_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void *c) {
+static uint16_t mn_rows(MenuLayer *m, uint16_t sec, void *ctx) { return s_menu_spec.rows; }
+static void mn_draw(GContext *ctx, const Layer *cell, MenuIndex *idx, void *c) {
   menu_cell_basic_draw(ctx, cell, s_menu_spec.row_title(idx->row), s_menu_spec.row_sub ? s_menu_spec.row_sub(idx->row) : NULL, NULL);
 }
-static int16_t m_header_h(MenuLayer *m, uint16_t sec, void *c) { return PBL_IF_ROUND_ELSE(0, 22); }
-static void m_header(GContext *ctx, const Layer *cell, uint16_t sec, void *c) {
+static int16_t mn_header_h(MenuLayer *m, uint16_t sec, void *c) { return PBL_IF_ROUND_ELSE(0, 22); }
+static void mn_header(GContext *ctx, const Layer *cell, uint16_t sec, void *c) {
   GRect b = layer_get_bounds(cell);
   text_at(ctx, s_menu_spec.title, f14b, GRect(6, 1, b.size.w - 12, 18), GTextAlignmentLeft, COL_ACCENT);
 }
-static uint16_t m_secs(MenuLayer *m, void *c) { return 1; }
+static uint16_t mn_secs(MenuLayer *m, void *c) { return 1; }
 static void mn_select(MenuLayer *m, MenuIndex *idx, void *c) {
   int row = idx->row;
+  MenuPick pick = s_menu_spec.pick;
   window_stack_remove(s_menu_win, true);
-  s_menu_spec.pick(row);
+  pick(row);
 }
 static void menu_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   s_menu = menu_layer_create(layer_get_bounds(root));
   menu_layer_set_callbacks(s_menu, NULL, (MenuLayerCallbacks){
-    .get_num_sections = m_secs, .get_num_rows = m_rows, .draw_row = m_draw,
-    .get_header_height = m_header_h, .draw_header = m_header, .select_click = mn_select });
+    .get_num_sections = mn_secs, .get_num_rows = mn_rows, .draw_row = mn_draw,
+    .get_header_height = mn_header_h, .draw_header = mn_header, .select_click = mn_select });
   menu_layer_set_normal_colors(s_menu, COL_BG, COL_TEXT);
-  menu_layer_set_highlight_colors(s_menu, COL_FILL, PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+  menu_layer_set_highlight_colors(s_menu, COL_FILL, COL_ON_FILL);
   menu_layer_set_click_config_onto_window(s_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_menu));
 }
@@ -466,23 +526,22 @@ static void open_menu(MenuSpec spec) {
 // ---------------- confirm dialog ----------------
 static Window *s_confirm_win;
 static Layer *s_confirm_layer;
-static char s_confirm_text[32];
+static char s_confirm_text[32], s_confirm_progress[24];
 static int s_confirm_cmd;
-static char s_confirm_progress[24];
 
 static void confirm_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   int W = b.size.w, H = b.size.h;
   graphics_context_set_fill_color(ctx, COL_BG);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
-  text_at(ctx, s_confirm_text, f24b, GRect(10, H / 2 - 40, W - 20 - PBL_IF_ROUND_ELSE(0, 14), 60), GTextAlignmentCenter, COL_TEXT);
-  text_at(ctx, "Back to cancel", f14b, GRect(10, H / 2 + 20, W - 20 - PBL_IF_ROUND_ELSE(0, 14), 20), GTextAlignmentCenter, COL_FAINT);
-  // confirm button hint beside the select button
+  int side = PBL_IF_ROUND_ELSE(0, 16);
+  text_at(ctx, s_confirm_text, f24b, GRect(10, H / 2 - 40, W - 20 - side, 60), GTextAlignmentCenter, COL_TEXT);
+  text_at(ctx, "Back to cancel", f14b, GRect(10, H / 2 + 20, W - 20 - side, 20), GTextAlignmentCenter, COL_FAINT);
   int r = 11;
-  GPoint c = PBL_IF_ROUND_ELSE(GPoint(W - r - 6, H / 2), GPoint(W - r - 2, H / 2));
+  GPoint c = GPoint(W - r - PBL_IF_ROUND_ELSE(6, 2), H / 2);
   graphics_context_set_fill_color(ctx, COL_FILL);
   graphics_fill_circle(ctx, c, r);
-  graphics_context_set_stroke_color(ctx, PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack));
+  graphics_context_set_stroke_color(ctx, COL_ON_FILL);
   graphics_context_set_stroke_width(ctx, 2);
   graphics_draw_line(ctx, GPoint(c.x - 5, c.y), GPoint(c.x - 1, c.y + 4));
   graphics_draw_line(ctx, GPoint(c.x - 1, c.y + 4), GPoint(c.x + 5, c.y - 4));
@@ -511,80 +570,101 @@ static void confirm(const char *text, int cmd, const char *progress) {
   window_stack_push(s_confirm_win, true);
 }
 
-// ---------------- climate screen ----------------
-static int s_pending_temp = NO_TEMP;  // c10 being edited
-static AppTimer *s_temp_timer;
+// ---------------- shared quick actions ----------------
+static void set_split(bool on) {
+  s.split = on;
+  save_status();
+  send3(T_SETTING, 0, on ? 1 : 0);
+  toast(TOAST_OK, on ? "Split temperature on" : "Split temperature off", 1500);
+}
 
-static int temp_shown(void) { return s_pending_temp != NO_TEMP ? s_pending_temp : s.set_temp; }
+// ---------------- climate screen ----------------
+static Window *s_climate_win;
+static int s_pend[2] = { NO_TEMP, NO_TEMP };  // pending driver / passenger temps (c10)
+static int s_side;                             // 0 driver, 1 passenger (split mode)
+
+static int shown_temp(int side) {
+  if (s_pend[side] != NO_TEMP) return s_pend[side];
+  return side ? (s.pass_temp ? s.pass_temp : s.set_temp) : s.set_temp;
+}
+static bool pending(void) { return s_pend[0] != NO_TEMP || s_pend[1] != NO_TEMP; }
+
+static void chevron(GContext *ctx, GPoint c, bool up, int w, GColor col) {
+  graphics_context_set_stroke_color(ctx, col);
+  graphics_context_set_stroke_width(ctx, 3);
+  int h = w / 2;
+  if (up) { graphics_draw_line(ctx, GPoint(c.x - w, c.y + h / 2), GPoint(c.x, c.y - h / 2)); graphics_draw_line(ctx, GPoint(c.x, c.y - h / 2), GPoint(c.x + w, c.y + h / 2)); }
+  else { graphics_draw_line(ctx, GPoint(c.x - w, c.y - h / 2), GPoint(c.x, c.y + h / 2)); graphics_draw_line(ctx, GPoint(c.x, c.y + h / 2), GPoint(c.x + w, c.y - h / 2)); }
+}
+
+static void chip(GContext *ctx, GRect r, const char *label, bool on) {
+  graphics_context_set_fill_color(ctx, on ? COL_FILL : COL_CARD);
+  graphics_fill_rect(ctx, r, r.size.h / 2, GCornersAll);
+#ifdef PBL_BW
+  if (!on) { graphics_context_set_stroke_color(ctx, GColorWhite); graphics_context_set_stroke_width(ctx, 1); graphics_draw_round_rect(ctx, r, r.size.h / 2); }
+#endif
+  text_at(ctx, label, f14b, GRect(r.origin.x, r.origin.y + (r.size.h - 18) / 2 - 1, r.size.w, 18), GTextAlignmentCenter, on ? COL_ON_FILL : COL_TEXT);
+}
 
 static void climate_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   int W = b.size.w, H = b.size.h;
   bool round = PBL_IF_ROUND_ELSE(true, false);
   bool large = W >= 200;
-  int side = round ? 0 : 14;  // room for button hints on the right
+  int side = round ? 0 : 16;
+  int areaw = W - side;
   graphics_context_set_fill_color(ctx, COL_BG);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
 
   // title + power pill
-  int ty = round ? H / 9 : 4;
-  text_at(ctx, "Climate", f18b, GRect(round ? 0 : 6, ty, round ? W : W / 2, 22), round ? GTextAlignmentCenter : GTextAlignmentLeft, COL_TEXT);
-  int pw = 40, ph = 18;
-  GRect pill = round ? GRect((W - pw) / 2, ty + 24, pw, ph) : GRect(W - side - pw - 4, ty + 3, pw, ph);
-  graphics_context_set_fill_color(ctx, s.climate ? COL_FILL : COL_CARD);
-  graphics_fill_rect(ctx, pill, ph / 2, GCornersAll);
-#ifdef PBL_BW
-  if (!s.climate) { graphics_context_set_stroke_color(ctx, GColorWhite); graphics_draw_round_rect(ctx, pill, ph / 2); }
-#endif
-  text_at(ctx, s.climate ? "ON" : "OFF", f14b, GRect(pill.origin.x, pill.origin.y, pw, ph),
-          GTextAlignmentCenter, (s.climate && PBL_IF_COLOR_ELSE(false, true)) ? GColorBlack : COL_TEXT);
+  int ty = round ? H / 10 : 6;
+  text_at(ctx, "Climate", f18b, GRect(round ? 0 : 8, ty - 2, round ? W : W / 2, 22), round ? GTextAlignmentCenter : GTextAlignmentLeft, COL_TEXT);
+  int pw = 42, ph = 18;
+  GRect pill = round ? GRect((W - pw) / 2, ty + 20, pw, ph) : GRect(areaw - pw - 6, ty + 1, pw, ph);
+  chip(ctx, pill, s.climate ? "ON" : "OFF", s.climate);
 
-  // big set temperature with chevrons
+  int tcy = round ? H * 47 / 100 : H * 44 / 100;
   char t[12];
-  fmt_temp(t, sizeof(t), temp_shown(), true);
-  int bigh = 42;
-  int tcy = H * (round ? 50 : 45) / 100;
-  int areaw = W - side;
-  text_at(ctx, t, f_big, GRect(0, tcy - bigh / 2 - 6, areaw, bigh + 10), GTextAlignmentCenter,
-          s.climate ? COL_TEXT : COL_DIM);
-  graphics_context_set_stroke_color(ctx, s_pending_temp != NO_TEMP ? COL_ACCENT : COL_FAINT);
-  graphics_context_set_stroke_width(ctx, 3);
-  int cx = areaw / 2, up = tcy - bigh / 2 - 8, dn = tcy + bigh / 2 + 10;
-  graphics_draw_line(ctx, GPoint(cx - 8, up + 5), GPoint(cx, up - 2));
-  graphics_draw_line(ctx, GPoint(cx, up - 2), GPoint(cx + 8, up + 5));
-  graphics_draw_line(ctx, GPoint(cx - 8, dn - 5), GPoint(cx, dn + 2));
-  graphics_draw_line(ctx, GPoint(cx, dn + 2), GPoint(cx + 8, dn - 5));
-
-  // inside / outside
-  char in[10], out[10], line[40];
-  fmt_temp(in, sizeof(in), s.in_temp, true);
-  fmt_temp(out, sizeof(out), s.out_temp, true);
-  snprintf(line, sizeof(line), "In %s   Out %s", in, out);
-  int iy = dn + (large ? 12 : 6);
-  text_at(ctx, line, f14b, GRect(round ? W / 8 : 2, iy, round ? W * 3 / 4 : areaw - 4, 18), GTextAlignmentCenter, COL_DIM);
-
-  // defrost + seat chips
-  int chy = iy + 20;
-  if (chy + 18 < H - (round ? H / 8 : 0)) {
-    char seat[16];
-    static const char *lv[] = { "Off", "Low", "Med", "High" };
-    snprintf(seat, sizeof(seat), "Seat %s", lv[s.seat > 3 ? 3 : s.seat]);
-    int cwid = round ? W / 3 : (areaw - 12) / 2;
-    GRect c1 = GRect(round ? W / 2 - cwid - 2 : 4, chy, cwid, 18), c2 = GRect(round ? W / 2 + 2 : 8 + cwid, chy, cwid, 18);
-    graphics_context_set_fill_color(ctx, s.defrost ? COL_FILL : COL_CARD);
-    graphics_fill_rect(ctx, c1, 9, GCornersAll);
-    graphics_context_set_fill_color(ctx, s.seat ? COL_FILL : COL_CARD);
-    graphics_fill_rect(ctx, c2, 9, GCornersAll);
-#ifdef PBL_BW
-    graphics_context_set_stroke_color(ctx, GColorWhite);
-    graphics_draw_round_rect(ctx, c1, 9); graphics_draw_round_rect(ctx, c2, 9);
-#endif
-    GColor on_txt = PBL_IF_COLOR_ELSE(GColorWhite, GColorBlack);
-    text_at(ctx, "Defrost", f14b, GRect(c1.origin.x, c1.origin.y - 1, c1.size.w, 18), GTextAlignmentCenter, s.defrost ? on_txt : COL_TEXT);
-    text_at(ctx, seat, f14b, GRect(c2.origin.x, c2.origin.y - 1, c2.size.w, 18), GTextAlignmentCenter, s.seat ? on_txt : COL_TEXT);
+  bool pend = pending();
+  if (!s.split) {
+    fmt_temp(t, sizeof(t), shown_temp(0));
+    text_at(ctx, t, f_big, GRect(0, tcy - 27, areaw, 50), GTextAlignmentCenter, pend ? COL_ACCENT : (s.climate ? COL_TEXT : COL_DIM));
+    chevron(ctx, GPoint(areaw / 2, tcy - 38), true, large ? 20 : 17, pend ? COL_ACCENT : COL_DIM);
+    chevron(ctx, GPoint(areaw / 2, tcy + 38), false, large ? 20 : 17, pend ? COL_ACCENT : COL_DIM);
+  } else {
+    for (int sd = 0; sd < 2; sd++) {
+      int cx = areaw * (sd ? 74 : 26) / 100;
+      bool act = sd == s_side;
+      text_at(ctx, sd ? "Passenger" : "Driver", f14b, GRect(cx - 40, tcy - 48, 80, 18), GTextAlignmentCenter, act ? COL_ACCENT : COL_FAINT);
+      fmt_temp(t, sizeof(t), shown_temp(sd));
+      text_at(ctx, t, f28b, GRect(cx - 40, tcy - 18, 80, 34), GTextAlignmentCenter,
+              s_pend[sd] != NO_TEMP ? COL_ACCENT : (act ? COL_TEXT : COL_DIM));
+      if (act) {
+        chevron(ctx, GPoint(cx, tcy - 26), true, 13, s_pend[sd] != NO_TEMP ? COL_ACCENT : COL_DIM);
+        chevron(ctx, GPoint(cx, tcy + 28), false, 13, s_pend[sd] != NO_TEMP ? COL_ACCENT : COL_DIM);
+      }
+    }
   }
 
-  // button hints on the right edge (up = warmer, select = power, down = cooler)
+  // inside/outside or "press select" hint
+  int iy = tcy + 48;
+  if (pend) {
+    text_at(ctx, "Select to set", f18b, GRect(round ? W / 8 : 2, iy - 3, round ? W * 3 / 4 : areaw - 4, 22), GTextAlignmentCenter, COL_ACCENT);
+  } else {
+    char in[10], out[10], line[40];
+    fmt_temp(in, sizeof(in), s.in_temp);
+    fmt_temp(out, sizeof(out), s.out_temp);
+    snprintf(line, sizeof(line), "In %s   Out %s", in, out);
+    text_at(ctx, line, f14b, GRect(round ? W / 8 : 2, iy, round ? W * 3 / 4 : areaw - 4, 18), GTextAlignmentCenter, COL_DIM);
+  }
+  // chips
+  int chy = iy + 22;
+  if (chy + 18 <= H - (round ? H / 7 : 2)) {
+    int cw = round ? W / 3 : (areaw - 14) / 2;
+    chip(ctx, GRect(round ? W / 2 - cw - 2 : 5, chy, cw, 18), "Defrost", s.defrost);
+    chip(ctx, GRect(round ? W / 2 + 2 : 9 + cw, chy, cw, 18), "Vent", s.windows);
+  }
+  // button hints on the right edge
   if (!round) {
     graphics_context_set_fill_color(ctx, COL_FAINT);
     graphics_fill_rect(ctx, GRect(W - 3, 18, 3, 26), 1, GCornersAll);
@@ -592,30 +672,24 @@ static void climate_update(Layer *layer, GContext *ctx) {
     graphics_fill_rect(ctx, GRect(W - 3, H - 44, 3, 26), 1, GCornersAll);
     text_at(ctx, "+", f18b, GRect(W - side - 2, 18, side, 22), GTextAlignmentCenter, COL_DIM);
     text_at(ctx, "-", f18b, GRect(W - side - 2, H - 46, side, 22), GTextAlignmentCenter, COL_DIM);
-    graphics_context_set_fill_color(ctx, COL_DIM);
-    graphics_fill_circle(ctx, GPoint(W - side / 2 - 2, H / 2), 3);
-  }
-  if (s_toast_kind == TOAST_NONE && H - (chy + 20) >= 22 && !round) {
-    text_at(ctx, "Hold select: more", f14b, GRect(2, H - 20, areaw - 4, 18), GTextAlignmentCenter, COL_FAINT);
+    if (pend) {
+      graphics_context_set_stroke_color(ctx, COL_ACCENT);
+      graphics_context_set_stroke_width(ctx, 2);
+      int x = W - side / 2 - 2, y = H / 2;
+      graphics_draw_line(ctx, GPoint(x - 4, y), GPoint(x - 1, y + 3));
+      graphics_draw_line(ctx, GPoint(x - 1, y + 3), GPoint(x + 4, y - 3));
+    } else {
+      graphics_context_set_fill_color(ctx, COL_DIM);
+      graphics_fill_circle(ctx, GPoint(W - side / 2 - 2, H / 2), 3);
+    }
   }
   draw_toast(ctx, b);
 }
 
-static void temp_commit(void *ctx) {
-  s_temp_timer = NULL;
-  if (s_pending_temp == NO_TEMP) return;
-  int c10 = s_pending_temp;
-  s.set_temp = c10;
-  s_pending_temp = NO_TEMP;
-  s_busy = false;  // allow temperature even right after another command
-  char what[24], t[12];
-  fmt_temp(t, sizeof(t), c10, true);
-  snprintf(what, sizeof(what), "Setting %s", t);
-  send_cmd(C_SET_TEMP, c10, what);
-}
 static void temp_step(int dir) {
-  int cur = temp_shown();
-  if (cur == NO_TEMP) cur = 210;
+  int sd = s.split ? s_side : 0;
+  int cur = shown_temp(sd);
+  if (cur == NO_TEMP || cur == 0) cur = 210;
   int next;
   if (is_f()) {
     int f = c10_to_disp(cur) + dir;
@@ -627,39 +701,57 @@ static void temp_step(int dir) {
     if (next < 150) { next = 150; }
     if (next > 280) { next = 280; }
   }
-  s_pending_temp = next;
-  if (s_temp_timer) app_timer_reschedule(s_temp_timer, 1500);
-  else s_temp_timer = app_timer_register(1500, temp_commit, NULL);
+  s_pend[sd] = next;
   redraw();
+}
+static void apply_temps(void) {
+  char what[28], t1[10], t2[10];
+  if (!s.split) {
+    int c10 = s_pend[0];
+    s.set_temp = s.pass_temp = c10;
+    fmt_temp(t1, sizeof(t1), c10);
+    snprintf(what, sizeof(what), "Setting %s", t1);
+    send_cmd(C_SET_TEMP, c10, what);
+  } else {
+    int d = shown_temp(0), p = shown_temp(1);
+    s.set_temp = d; s.pass_temp = p;
+    fmt_temp(t1, sizeof(t1), d); fmt_temp(t2, sizeof(t2), p);
+    snprintf(what, sizeof(what), "Setting %s / %s", t1, t2);
+    send_cmd(C_SET_TEMPS, ((int32_t)d << 16) | (p & 0xffff), what);
+  }
+  s_pend[0] = s_pend[1] = NO_TEMP;
 }
 static void cl_up(ClickRecognizerRef r, void *c) { temp_step(+1); }
 static void cl_down(ClickRecognizerRef r, void *c) { temp_step(-1); }
 static void cl_select(ClickRecognizerRef r, void *c) {
+  if (pending()) { apply_temps(); return; }
+  if (s.split) { s_side = !s_side; redraw(); return; }
   if (s.climate) send_cmd(C_CLIMATE_OFF, 0, "Climate off");
   else send_cmd(C_CLIMATE_ON, 0, "Climate on");
 }
 
-static const char *opt_title(int row) {
-  static const char *t[] = { "Defrost", "Seat heat", "Climate" };
+static const char *copt_title(int row) {
+  static const char *t[] = { "Climate", "Defrost car", "Windows", "Split temperature" };
   return t[row];
 }
-static const char *opt_sub(int row) {
-  static char buf[24];
-  static const char *lv[] = { "Off", "Low", "Medium", "High" };
-  if (row == 0) return s.defrost ? "On - tap to turn off" : "Off - tap for max defrost";
-  if (row == 1) { snprintf(buf, sizeof(buf), "Driver: %s", lv[s.seat > 3 ? 3 : s.seat]); return buf; }
-  return s.climate ? "On - tap to turn off" : "Off - tap to turn on";
+static const char *copt_sub(int row) {
+  switch (row) {
+    case 0: return s.climate ? "On - select to turn off" : "Off - select to turn on";
+    case 1: return s.defrost ? "On - select to turn off" : "Off - select for max defrost";
+    case 2: return s.windows ? "Vented - select to close" : "Closed - select to vent";
+    default: return s.split ? "On - driver & passenger" : "Off - one temperature";
+  }
 }
-static void opt_pick(int row) {
-  if (row == 0) send_cmd(s.defrost ? C_DEFROST_OFF : C_DEFROST_ON, 0, s.defrost ? "Defrost off" : "Defrost on");
-  else if (row == 1) {
-    int next = (s.seat + 1) % 4;
-    static const char *lv[] = { "Seat off", "Seat low", "Seat medium", "Seat high" };
-    send_cmd(C_SEAT, next, lv[next]);
-  } else cl_select(NULL, NULL);
+static void copt_pick(int row) {
+  switch (row) {
+    case 0: if (s.climate) send_cmd(C_CLIMATE_OFF, 0, "Climate off"); else send_cmd(C_CLIMATE_ON, 0, "Climate on"); break;
+    case 1: send_cmd(s.defrost ? C_DEFROST_OFF : C_DEFROST_ON, 0, s.defrost ? "Defrost off" : "Defrost on"); break;
+    case 2: send_cmd(s.windows ? C_CLOSE_WIN : C_VENT, 0, s.windows ? "Closing windows" : "Venting windows"); break;
+    default: set_split(!s.split); s_side = 0; break;
+  }
 }
 static void cl_long(ClickRecognizerRef r, void *c) {
-  open_menu((MenuSpec){ .title = "Climate", .rows = 3, .row_title = opt_title, .row_sub = opt_sub, .pick = opt_pick });
+  open_menu((MenuSpec){ .title = "Climate", .rows = 4, .row_title = copt_title, .row_sub = copt_sub, .pick = copt_pick });
 }
 static void climate_clicks(void *ctx) {
   window_single_repeating_click_subscribe(BUTTON_ID_UP, 200, cl_up);
@@ -674,11 +766,13 @@ static void climate_load(Window *w) {
   layer_add_child(root, s_climate_layer);
 }
 static void climate_unload(Window *w) {
-  if (s_temp_timer) { app_timer_cancel(s_temp_timer); temp_commit(NULL); }
+  s_pend[0] = s_pend[1] = NO_TEMP;  // leaving without pressing Select sends nothing
   layer_destroy(s_climate_layer); s_climate_layer = NULL;
   window_destroy(w); s_climate_win = NULL;
 }
 static void open_climate(void) {
+  s_pend[0] = s_pend[1] = NO_TEMP;
+  s_side = 0;
   s_climate_win = window_create();
   window_set_background_color(s_climate_win, COL_BG);
   window_set_click_config_provider(s_climate_win, climate_clicks);
@@ -686,50 +780,381 @@ static void open_climate(void) {
   window_stack_push(s_climate_win, true);
 }
 
-// ---------------- "More" menu ----------------
+// ---------------- seats & heat screen (top-down car) ----------------
+enum { I_WHEEL, I_SEAT_D, I_SEAT_P, I_SEAT_RL, I_SEAT_RC, I_SEAT_RR, I_WINDSHIELD, I_REAR_WIN, I_COUNT };
+static Window *s_seat_win;
+static int s_item = I_SEAT_D;
+static int s_menu_seat;  // seat index for the level menu
+
+static bool item_visible(int i) { return !(i >= I_SEAT_RL && i <= I_SEAT_RR && !s.has_rear && s.has_data); }
+
+static const char *item_name(int i) {
+  static const char *n[] = { "Steering wheel", "Driver seat", "Passenger seat", "Rear left", "Rear middle", "Rear right", "Windshield", "Rear window" };
+  return n[i];
+}
+static void item_state(int i, char *buf, size_t n) {
+  static const char *lv[] = { "Off", "Low", "Medium", "High" };
+  if (i == I_WHEEL) snprintf(buf, n, "%s", s.wheel ? "Heat on" : "Off");
+  else if (i == I_WINDSHIELD || i == I_REAR_WIN) snprintf(buf, n, "%s", (i == I_WINDSHIELD ? s.defrost : (s.rear_defrost || s.defrost)) ? "Defrosting" : "Off");
+  else {
+    int k = i - I_SEAT_D;
+    if (k < 2 && s.cool[k]) snprintf(buf, n, "Cool %s", lv[s.cool[k] > 3 ? 3 : s.cool[k]]);
+    else if (s.seat[k]) snprintf(buf, n, "Heat %s", lv[s.seat[k] > 3 ? 3 : s.seat[k]]);
+    else snprintf(buf, n, "Off");
+  }
+}
+
+// Positions on the 200 x 228 seat map art: x, y, w, h
+static const int16_t SEAT_BOX[I_COUNT][4] = {
+  { 70, 53, 20, 20 },                                   // steering wheel
+  { 68, 72, 24, 38 }, { 107, 72, 24, 38 },              // front seats
+  { 67, 115, 22, 35 }, { 91, 115, 18, 35 }, { 111, 115, 22, 35 },  // rear seats
+  { 65, 42, 68, 9 }, { 74, 185, 52, 13 },               // windshield, rear window
+};
+static GBitmap *s_seat_bmp;
+
+static void seat_update(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  int W = b.size.w, H = b.size.h;
+  bool round = PBL_IF_ROUND_ELSE(true, false);
+  graphics_context_set_fill_color(ctx, COL_BG);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  if (!s_seat_bmp) s_seat_bmp = gbitmap_create_with_resource(RESOURCE_ID_SEATS);
+  GSize ms = gbitmap_get_bounds(s_seat_bmp).size;
+  int mx = (W - ms.w) / 2, my = round ? (H - ms.h) / 2 - H / 14 : 2;
+  graphics_context_set_compositing_mode(ctx, GCompOpAssign);
+  graphics_draw_bitmap_in_rect(ctx, s_seat_bmp, GRect(mx, my, ms.w, ms.h));
+  int k = ms.w;  // scale = k / 200
+
+  for (int i = 0; i < I_COUNT; i++) {
+    if (!item_visible(i)) continue;
+    GRect r = GRect(mx + SEAT_BOX[i][0] * k / 200, my + SEAT_BOX[i][1] * k / 200, SEAT_BOX[i][2] * k / 200, SEAT_BOX[i][3] * k / 200);
+    GPoint c = grect_center_point(&r);
+    int sz = r.size.w < r.size.h ? r.size.w : r.size.h;
+    if (i == I_WHEEL) {
+      if (s.wheel) { graphics_context_set_stroke_color(ctx, COL_HEAT); graphics_context_set_stroke_width(ctx, 2); graphics_draw_circle(ctx, c, r.size.w / 2); }
+    } else if (i == I_WINDSHIELD || i == I_REAR_WIN) {
+      bool on = i == I_WINDSHIELD ? s.defrost : (s.rear_defrost || s.defrost);
+      if (on) {
+        graphics_context_set_stroke_color(ctx, COL_HEAT);
+        graphics_context_set_stroke_width(ctx, 1);
+        for (int y = r.origin.y + 1; y < r.origin.y + r.size.h; y += 3)
+          graphics_draw_line(ctx, GPoint(r.origin.x + 3, y), GPoint(r.origin.x + r.size.w - 4, y));
+      }
+    } else {
+      int seat = i - I_SEAT_D;
+      int lvl;
+      if (seat < 2 && s.cool[seat]) { lvl = s.cool[seat] > 3 ? 3 : s.cool[seat]; icon_cool(ctx, c, sz + 4, lvl, COL_COOL); }
+      else if (s.seat[seat]) { lvl = s.seat[seat] > 3 ? 3 : s.seat[seat]; icon_heat(ctx, c, sz, lvl, COL_HEAT); }
+    }
+    if (i == s_item) {
+      graphics_context_set_stroke_color(ctx, COL_ACCENT);
+      graphics_context_set_stroke_width(ctx, 2);
+      graphics_draw_round_rect(ctx, grect_inset(r, GEdgeInsets(-2)), 4);
+    }
+  }
+
+  // label
+  char st[24];
+  item_state(s_item, st, sizeof(st));
+  int ly = my + ms.h + (round ? 0 : 2);
+  if (ly + 36 > H) ly = H - 36;
+  text_at(ctx, item_name(s_item), f18b, GRect(round ? W / 6 : 2, ly - 3, round ? W * 2 / 3 : W - 4, 22), GTextAlignmentCenter, COL_TEXT);
+  text_at(ctx, st, f14b, GRect(round ? W / 6 : 2, ly + 16, round ? W * 2 / 3 : W - 4, 18), GTextAlignmentCenter, COL_DIM);
+  draw_toast(ctx, b);
+}
+
+static const char *lvl_title(int row) {
+  static const char *t[] = { "Off", "Heat low", "Heat medium", "Heat high", "Cool low", "Cool medium", "Cool high" };
+  return t[row];
+}
+static void lvl_pick(int row) {
+  int k = s_menu_seat;
+  static const char *what[] = { "Seat off", "Heat low", "Heat medium", "Heat high", "Cool low", "Cool medium", "Cool high" };
+  if (row == 0) {
+    if (k < 2 && s.cool[k]) send_cmd(C_COOL, (k << 4) | 0, what[0]);
+    else send_cmd(C_SEAT, (k << 4) | 0, what[0]);
+  } else if (row <= 3) send_cmd(C_SEAT, (k << 4) | row, what[row]);
+  else send_cmd(C_COOL, (k << 4) | (row - 3), what[row]);
+}
+static void seat_select(ClickRecognizerRef r, void *c) {
+  switch (s_item) {
+    case I_WHEEL: send_cmd(s.wheel ? C_WHEEL_OFF : C_WHEEL_ON, 0, s.wheel ? "Wheel heat off" : "Wheel heat on"); break;
+    case I_WINDSHIELD: case I_REAR_WIN:
+      // Tesla only offers one defrost switch for both windshields.
+      send_cmd(s.defrost ? C_DEFROST_OFF : C_DEFROST_ON, 0, s.defrost ? "Defrost off" : "Defrosting car");
+      break;
+    default: {
+      s_menu_seat = s_item - I_SEAT_D;
+      int rows = (s_menu_seat < 2 && s.can_cool) ? 7 : 4;
+      open_menu((MenuSpec){ .title = item_name(s_item), .rows = rows, .row_title = lvl_title, .row_sub = NULL, .pick = lvl_pick });
+    }
+  }
+}
+static void seat_move(int dir) {
+  do { s_item = (s_item + I_COUNT + dir) % I_COUNT; } while (!item_visible(s_item));
+  redraw();
+}
+static void seat_up(ClickRecognizerRef r, void *c) { seat_move(-1); }
+static void seat_down(ClickRecognizerRef r, void *c) { seat_move(+1); }
+static void seat_clicks(void *ctx) {
+  window_single_click_subscribe(BUTTON_ID_UP, seat_up);
+  window_single_click_subscribe(BUTTON_ID_DOWN, seat_down);
+  window_single_click_subscribe(BUTTON_ID_SELECT, seat_select);
+}
+static void seat_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  s_seat_layer = layer_create(layer_get_bounds(root));
+  layer_set_update_proc(s_seat_layer, seat_update);
+  layer_add_child(root, s_seat_layer);
+}
+static void seat_unload(Window *w) {
+  layer_destroy(s_seat_layer); s_seat_layer = NULL;
+  if (s_seat_bmp) { gbitmap_destroy(s_seat_bmp); s_seat_bmp = NULL; }
+  window_destroy(w); s_seat_win = NULL;
+}
+static void open_seats(void) {
+  s_item = I_SEAT_D;
+  s_seat_win = window_create();
+  window_set_background_color(s_seat_win, COL_BG);
+  window_set_click_config_provider(s_seat_win, seat_clicks);
+  window_set_window_handlers(s_seat_win, (WindowHandlers){ .load = seat_load, .unload = seat_unload });
+  window_stack_push(s_seat_win, true);
+}
+
+// ---------------- "More" menu (hold Select on the main screen) ----------------
 static const char *more_title(int row) {
-  static const char *t[] = { "Flash lights", "Honk horn", "Wake & refresh", "Lock", "Unlock" };
+  static const char *t[] = { "Flash lights", "Honk horn", "Windows", "Split temperature", "Wake & refresh" };
   return t[row];
 }
 static const char *more_sub(int row) {
-  if (row == 2) return s.car_state == S_ASLEEP ? "Car is asleep" : "Get latest status";
-  return NULL;
+  switch (row) {
+    case 2: return s.windows ? "Vented - select to close" : "Closed - select to vent";
+    case 3: return s.split ? "On - driver & passenger" : "Off - one temperature";
+    case 4: return s.car_state == S_ASLEEP ? "Car is asleep" : "Get latest status";
+    default: return NULL;
+  }
 }
 static void more_pick(int row) {
   switch (row) {
     case 0: send_cmd(C_FLASH, 0, "Flashing"); break;
     case 1: confirm("Honk the horn?", C_HONK, "Honking"); break;
-    case 2: send_refresh(true); break;
-    case 3: send_cmd(C_LOCK, 0, "Locking"); break;
-    case 4: confirm("Unlock car?", C_UNLOCK, "Unlocking"); break;
+    case 2: send_cmd(s.windows ? C_CLOSE_WIN : C_VENT, 0, s.windows ? "Closing windows" : "Venting windows"); break;
+    case 3: set_split(!s.split); break;
+    default: send_refresh(true); break;
   }
 }
 
-// ---------------- main window clicks ----------------
+// ---------------- main screen ----------------
+enum { B_CLIMATE, B_SEAT, B_FRUNK, B_TRUNK, B_LOCK, B_COUNT };
+static Window *s_main_win;
+static int s_sel = B_CLIMATE;
+
+static const char *state_label(void) {
+  switch (s.car_state) {
+    case S_ONLINE: return s.charging == 2 ? "Charging" : "Parked";
+    case S_ASLEEP: return "Asleep";
+    case S_OFFLINE: return "Offline";
+    case S_SETUP: return "Set up on phone";
+    case S_PAIR: return "Pair key";
+    case S_BUSY: return "Updating";
+    case S_ERROR: return "Error";
+    default: return "";
+  }
+}
+static GColor state_color(void) {
+  switch (s.car_state) {
+    case S_ONLINE: return s.charging == 2 ? COL_GOOD : COL_ACCENT;
+    case S_ERROR: case S_PAIR: case S_SETUP: return COL_BAD;
+    default: return COL_DIM;
+  }
+}
+static bool any_seat_on(void) {
+  for (int i = 0; i < 5; i++) if (s.seat[i]) return true;
+  return s.cool[0] || s.cool[1] || s.wheel;
+}
+static bool button_active(int b) {
+  if (!s.has_data) return false;
+  switch (b) {
+    case B_CLIMATE: return s.climate;
+    case B_SEAT: return any_seat_on();
+    case B_FRUNK: return s.frunk;
+    case B_TRUNK: return s.trunk;
+    default: return !s.locked;
+  }
+}
+static void button_label(int b, char *buf, size_t n) {
+  char t[10];
+  switch (b) {
+    case B_CLIMATE:
+      if (s.climate) { fmt_temp(t, sizeof(t), s.set_temp); snprintf(buf, n, "%s %s", s.defrost ? "Defrosting" : "Climate on", t); }
+      else snprintf(buf, n, "Climate off");
+      break;
+    case B_SEAT: snprintf(buf, n, "%s", any_seat_on() ? "Seat heat on" : "Seat heat"); break;
+    case B_FRUNK: snprintf(buf, n, "%s", s.frunk ? "Frunk open" : "Open frunk"); break;
+    case B_TRUNK: snprintf(buf, n, "%s", s.trunk ? "Trunk open" : "Open trunk"); break;
+    default: snprintf(buf, n, "%s", (s.locked || !s.has_data) ? "Locked" : "Unlocked"); break;
+  }
+}
+
+static void draw_button(GContext *ctx, GPoint c, int r, int b, bool sel) {
+  bool active = button_active(b);
+  GColor bg = sel ? COL_FILL : COL_CARD;
+  GColor fg = sel ? COL_ON_FILL : (active ? COL_ACCENT : COL_TEXT);
+  graphics_context_set_fill_color(ctx, bg);
+  graphics_fill_circle(ctx, c, r);
+#ifdef PBL_BW
+  if (!sel) { graphics_context_set_stroke_color(ctx, GColorWhite); graphics_context_set_stroke_width(ctx, 1); graphics_draw_circle(ctx, c, r); }
+#endif
+  switch (b) {
+    case B_CLIMATE: icon_fan(ctx, c, r + 7, fg); break;
+    case B_SEAT: icon_heat(ctx, c, r + 3, 3, fg); break;
+    case B_FRUNK: icon_lid(ctx, GPoint(c.x, c.y + 2), r * 19 / 10, true, fg, bg); break;
+    case B_TRUNK: icon_lid(ctx, GPoint(c.x, c.y + 2), r * 19 / 10, false, fg, bg); break;
+    default: icon_lock(ctx, c, r + 4, s.locked || !s.has_data, fg, bg); break;
+  }
+  if (active && !sel) {
+    graphics_context_set_fill_color(ctx, COL_ACCENT);
+    graphics_fill_circle(ctx, GPoint(c.x, c.y + r + 4), 2);
+  }
+}
+
+static void main_update(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  int W = b.size.w, H = b.size.h;
+  bool round = PBL_IF_ROUND_ELSE(true, false);
+  bool large = W >= 200;
+  graphics_context_set_fill_color(ctx, COL_BG);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  GFont top_f = large ? f24b : f18b;
+  int top_h = large ? 26 : 20;
+
+  // --- top row: battery (left), inside temp (middle), range (right) ---
+  char pct[8], rng[16], tin[10];
+  if (s.has_data) snprintf(pct, sizeof(pct), "%d%%", s.battery); else snprintf(pct, sizeof(pct), "--%%");
+  if (s.has_data) snprintf(rng, sizeof(rng), "%d %s", s.range, is_mi() ? "mi" : "km"); else snprintf(rng, sizeof(rng), "--");
+  fmt_temp(tin, sizeof(tin), s.has_data ? s.in_temp : NO_TEMP);
+  bool chg = s.charging == 2 && s.has_data;
+  int bw = large ? 26 : 22, bh = large ? 13 : 11;
+  int row1 = round ? H * (large ? 13 : 15) / 100 : 4;
+  int lx = round ? W * 14 / 100 : 4, rx = round ? W * 86 / 100 : W - 4;
+  int tcy = row1 + top_h / 2 + 2;  // text visual centre
+  draw_battery(ctx, GRect(lx, tcy - bh / 2, bw, bh), s.has_data ? s.battery : 0, chg, s_pulse);
+  int px = lx + bw + 5;
+  text_at(ctx, pct, top_f, GRect(px, row1 - (large ? 3 : 2), 60, top_h + 4), GTextAlignmentLeft, COL_TEXT);
+  text_at(ctx, rng, top_f, GRect(rx - 70, row1 - (large ? 3 : 2), 70, top_h + 4), GTextAlignmentRight, COL_TEXT);
+  int ty = row1;
+  {
+    // only draw the middle temp if it fits between the two sides
+    int left_end = px + text_w(pct, top_f) + 4, right_start = rx - text_w(rng, top_f) - 4;
+    int tw = text_w(tin, top_f);
+    if (right_start - left_end >= tw + 4)
+      text_at(ctx, tin, top_f, GRect((left_end + right_start - tw) / 2 - 2, ty - 2, tw + 4, top_h + 4), GTextAlignmentCenter, COL_DIM);
+    else if (round)  // small round screens: tuck it into the top of the circle
+      text_at(ctx, tin, f18b, GRect(0, H * 2 / 100 - 4, W, 22), GTextAlignmentCenter, COL_DIM);
+  }
+
+  // --- second row: status + distance/direction ---
+  char line[48], dist[20];
+  fmt_dist(dist, sizeof(dist));
+  const char *st = state_label();
+  if (s.car_state == S_ASLEEP && s.updated) {
+    int mins = (time(NULL) - s.updated) / 60;
+    char ago[12];
+    if (mins < 60) snprintf(ago, sizeof(ago), "%dm ago", mins);
+    else if (mins < 60 * 48) snprintf(ago, sizeof(ago), "%dh ago", mins / 60);
+    else snprintf(ago, sizeof(ago), "%dd ago", mins / 1440);
+    snprintf(line, sizeof(line), "%s %s%s%s", st, ago, dist[0] ? " · " : "", dist);
+  } else snprintf(line, sizeof(line), "%s%s%s", st, (dist[0] && st[0]) ? " · " : "", dist);
+  int row2 = row1 + top_h + (large ? 4 : 2);
+  text_at(ctx, line, f14b, GRect(round ? W / 6 : 2, row2, round ? W * 2 / 3 : W - 4, 18), GTextAlignmentCenter, state_color());
+
+  // --- control row ---
+  int r = large ? 17 : 13;
+  int rowy = round ? H * 73 / 100 : H - (large ? 58 : 44);
+  int span = round ? W * 72 / 100 : W - 2 * (r + 3);
+  for (int i = 0; i < B_COUNT; i++) {
+    int cx = (W - span) / 2 + span * i / (B_COUNT - 1);
+    draw_button(ctx, GPoint(cx, rowy), r, i, i == s_sel);
+  }
+  char lbl[32];
+  button_label(s_sel, lbl, sizeof(lbl));
+  if (s.car_state == S_SETUP || s.car_state == S_PAIR || s.car_state == S_ERROR) { if (s.text[0]) snprintf(lbl, sizeof(lbl), "%s", s.text); }
+  int ly = rowy + r + (large ? 8 : 5);
+  text_at(ctx, lbl, f18b, GRect(round ? W / 6 : 2, ly, round ? W * 2 / 3 : W - 4, 22), GTextAlignmentCenter, COL_TEXT);
+
+  // --- car, centred in the space between the text and the buttons ---
+  const CarModel *m = car_model();
+  int area_top = row2 + 18 + (large ? 6 : 2);
+  int area_bot = rowy - r - (large ? 12 : 9);
+  int avail_h = area_bot - area_top;
+  int cw = round ? W * 64 / 100 : W - (large ? 26 : 18);
+  int lid_room = 8;  // space for a raised lid above the roof
+  if (cw * m->h / 100 + lid_room > avail_h) cw = (avail_h - lid_room) * 100 / m->h;
+  int ch = cw * m->h / 100;
+  int cy = area_top + lid_room + (avail_h - lid_room - ch) / 2;
+  if (use_sprites()) {
+    GBitmap *base = bmp_get(0, s_fr_frame ? FRUNK_RES[s_fr_frame] : TRUNK_RES[s_tr_frame]);
+    GSize bs = gbitmap_get_bounds(base).size;
+    int bx = (W - bs.w) / 2 - (chg ? bs.w / 30 : 0), by = area_top + (avail_h - bs.h) / 2;
+    graphics_context_set_compositing_mode(ctx, GCompOpAssign);
+    graphics_draw_bitmap_in_rect(ctx, base, GRect(bx, by, bs.w, bs.h));
+    if (s_fr_frame && s_tr_frame) {
+      // both open: lay the back half of the trunk frame over the frunk frame
+      GBitmap *tb = bmp_get(1, TRUNK_RES[s_tr_frame]);
+      int x0 = bs.w * 55 / 100;
+      GBitmap *half = gbitmap_create_as_sub_bitmap(tb, GRect(x0, 0, bs.w - x0, bs.h));
+      graphics_draw_bitmap_in_rect(ctx, half, GRect(bx + x0, by, bs.w - x0, bs.h));
+      gbitmap_destroy(half);
+    }
+    if (chg) {
+      // cord from the ground into the charge port in the left tail light
+      int k = bs.w;
+      GPoint pts[4] = { GPoint(bx + 192 * k / 186, by + bs.h + 2), GPoint(bx + 187 * k / 186, by + 60 * k / 186),
+                        GPoint(bx + 178 * k / 186, by + 47 * k / 186), GPoint(bx + 171 * k / 186, by + 41 * k / 186) };
+      graphics_context_set_stroke_width(ctx, 3);
+      for (int i = 0; i < 3; i++) {
+        bool lit = (s_phase % 3) == i;
+#ifdef PBL_BW
+        if (!lit && (s_phase / 3) % 2) continue;
+#endif
+        graphics_context_set_stroke_color(ctx, lit ? PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite) : PBL_IF_COLOR_ELSE(GColorDarkGreen, GColorWhite));
+        graphics_draw_line(ctx, pts[i], pts[i + 1]);
+      }
+      graphics_context_set_fill_color(ctx, (s_phase % 3) == 2 ? PBL_IF_COLOR_ELSE(GColorGreen, GColorWhite) : PBL_IF_COLOR_ELSE(GColorIslamicGreen, GColorWhite));
+      graphics_fill_circle(ctx, pts[3], 2);
+    }
+  } else {
+    draw_car(ctx, GRect((W - cw) / 2 - (chg ? cw / 22 : 0), cy, cw, ch), m, s.frunk && s.has_data, s.trunk && s.has_data, chg, s_phase);
+  }
+
+  draw_toast(ctx, b);
+}
+
 static void m_up(ClickRecognizerRef r, void *c) { s_sel = (s_sel + B_COUNT - 1) % B_COUNT; redraw(); }
 static void m_down(ClickRecognizerRef r, void *c) { s_sel = (s_sel + 1) % B_COUNT; redraw(); }
 static void m_select(ClickRecognizerRef r, void *c) {
   switch (s_sel) {
-    case B_LOCK:
-      if (s.locked || !s.has_data) confirm("Unlock car?", C_UNLOCK, "Unlocking");
-      else send_cmd(C_LOCK, 0, "Locking");
-      break;
     case B_CLIMATE: open_climate(); break;
+    case B_SEAT: open_seats(); break;
     case B_FRUNK:
       if (s.frunk) toast(TOAST_ERR, "Close by hand", 2500);
       else confirm("Open frunk?", C_FRUNK, "Opening frunk");
       break;
     case B_TRUNK: confirm(s.trunk ? "Close trunk?" : "Open trunk?", C_TRUNK, s.trunk ? "Closing trunk" : "Opening trunk"); break;
     default:
-      open_menu((MenuSpec){ .title = "More", .rows = 5, .row_title = more_title, .row_sub = more_sub, .pick = more_pick });
+      if (s.locked || !s.has_data) confirm("Unlock car?", C_UNLOCK, "Unlocking");
+      else send_cmd(C_LOCK, 0, "Locking");
   }
 }
-static void m_long(ClickRecognizerRef r, void *c) { send_refresh(true); }
+static void m_long(ClickRecognizerRef r, void *c) {
+  open_menu((MenuSpec){ .title = "More", .rows = 5, .row_title = more_title, .row_sub = more_sub, .pick = more_pick });
+}
 static void main_clicks(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_UP, m_up);
   window_single_click_subscribe(BUTTON_ID_DOWN, m_down);
   window_single_click_subscribe(BUTTON_ID_SELECT, m_select);
-  window_long_click_subscribe(BUTTON_ID_SELECT, 600, m_long, NULL);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 500, m_long, NULL);
 }
 static void main_load(Window *w) {
   Layer *root = window_get_root_layer(w);
@@ -747,11 +1172,13 @@ static void load_status(void) {
     if (s.version != STATUS_VERSION) memset(&s, 0, sizeof(s));
   }
   s.version = STATUS_VERSION;
-  if (!s.has_data) { s.set_temp = 210; s.in_temp = NO_TEMP; s.out_temp = NO_TEMP; s.units = 3; s.locked = true; }
+  if (!s.has_data) { s.set_temp = 210; s.pass_temp = 210; s.in_temp = NO_TEMP; s.out_temp = NO_TEMP; s.units = 3; s.locked = true; s.dist = -1; s.model = 2; }
   s.car_state = S_BUSY;
 #ifdef DEMO
   s.has_data = true; s.car_state = S_ONLINE; s.battery = 78; s.range = 241; s.units = 3; s.locked = true;
-  s.climate = true; s.set_temp = 211; s.in_temp = 185; s.out_temp = 90; s.seat = 2; s.trunk = DEMO_TRUNK;
+  s.climate = true; s.set_temp = 211; s.pass_temp = 200; s.in_temp = 185; s.out_temp = 90; s.model = DEMO_MODEL;
+  s.seat[0] = 2; s.seat[1] = 0; s.seat[2] = 1; s.cool[1] = 2; s.can_cool = true; s.has_rear = true; s.wheel = true;
+  s.trunk = DEMO_TRUNK; s.frunk = DEMO_TRUNK; s.charging = DEMO_CHARGING ? 2 : 0; s.dist = 480; s.bearing = 40; s.split = DEMO_SPLIT;
   strcpy(s.name, "Blue Thunder");
 #endif
 }
@@ -765,15 +1192,19 @@ static void init(void) {
   f_big = fonts_get_system_font(FONT_KEY_BITHAM_42_LIGHT);
   load_status();
   app_message_register_inbox_received(inbox);
-  app_message_open(512, 64);
+  app_message_open(1024, 64);
 
   s_main_win = window_create();
   window_set_background_color(s_main_win, COL_BG);
   window_set_click_config_provider(s_main_win, main_clicks);
   window_set_window_handlers(s_main_win, (WindowHandlers){ .load = main_load, .unload = main_unload });
   window_stack_push(s_main_win, false);
+  s_fr_frame = (s.frunk && s.has_data) ? 7 : 0;
+  s_tr_frame = (s.trunk && s.has_data) ? 7 : 0;
+  pulse_update();
 #ifdef DEMO
   if (DEMO_SCREEN == 1) open_climate();
+  if (DEMO_SCREEN == 2) open_seats();
 #endif
 }
 static void deinit(void) { save_status(); window_destroy(s_main_win); }

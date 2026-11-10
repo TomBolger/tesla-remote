@@ -159,7 +159,7 @@
 <script>
 var $ = function (id) { return document.getElementById(id); };
 var REDIRECT = location.origin + location.pathname;
-var SCOPES = 'openid offline_access vehicle_device_data vehicle_cmds vehicle_charging_cmds';
+var SCOPES = 'openid offline_access vehicle_device_data vehicle_location vehicle_cmds vehicle_charging_cmds';
 // The project's relay (see /relay). Needed because the Pebble phone app blocks direct calls to Tesla's car server.
 var RELAY_DEFAULT = 'https://tesla-remote-relay.tombolger.workers.dev';
 var FIELDS = ['domain', 'clientId', 'clientSecret', 'region', 'vin', 'carName', 'tempUnit', 'distUnit', 'authCode', 'relay'];
@@ -267,7 +267,7 @@ function render() {
     sheetRow('Allowed origin URL', esc(origin) + (d ? '<br><span style="color:var(--dim)">Your own key address, with https:// in front</span>' : ''), d ? origin : '') +
     sheetRow('Allowed redirect URI', esc(REDIRECT), REDIRECT) +
     sheetRow('Allowed returned URL', 'Leave empty') +
-    sheetRow('Scopes', 'Tick <b>Vehicle Information</b>, <b>Vehicle Commands</b> and <b>Vehicle Charging Management</b>') +
+    sheetRow('Scopes', 'Tick <b>Vehicle Information</b>, <b>Vehicle Location</b>, <b>Vehicle Commands</b> and <b>Vehicle Charging Management</b>') +
     sheetRow('Billing', 'Skip it');
 
   var dh = checkDomain(d), ch = checkClientId(f.clientId), sh = checkSecret(f.clientSecret);

@@ -5,9 +5,9 @@ var C = require('./crypto.js');
 // Where the setup page is hosted (static page, see /config in the repo).
 var CONFIG_URL = 'https://tombolger.github.io/tesla-remote/';
 
-var TYPE = { STATUS: 1, CMD: 2, RESULT: 3, REFRESH: 4, PROGRESS: 5 };
+var TYPE = { STATUS: 1, CMD: 2, RESULT: 3, REFRESH: 4, PROGRESS: 5, SETTING: 6 };
 var CMDS = [null, 'lock', 'unlock', 'frunk', 'trunk', 'climate_on', 'climate_off', 'set_temp',
-  'defrost_on', 'defrost_off', 'seat', 'flash', 'honk'];
+  'defrost_on', 'defrost_off', 'seat', 'flash', 'honk', 'cool', 'wheel_on', 'wheel_off', 'vent', 'close_windows', 'set_temps'];
 var STATE = { UNKNOWN: 0, ONLINE: 1, ASLEEP: 2, OFFLINE: 3, ERROR: 4, SETUP: 5, PAIR: 6, BUSY: 7 };
 var NO_TEMP = -1000;
 
@@ -74,9 +74,45 @@ function statusMsg(d, at, carState, text) {
     Units: units,
     Model: modelCode(vc.car_type),
     Age: at ? Math.max(0, Math.round((Date.now() - at) / 1000)) : 0,
-    CarName: String(name).slice(0, 24)
+    CarName: String(name).slice(0, 24),
+    PassTemp: t10(typeof cl.passenger_temp_setting === 'number' ? cl.passenger_temp_setting : cl.driver_temp_setting),
+    SeatR: num(cl.seat_heater_right, 0),
+    SeatRL: num(cl.seat_heater_rear_left, 0),
+    SeatRC: num(cl.seat_heater_rear_center, 0),
+    SeatRR: num(cl.seat_heater_rear_right, 0),
+    HasRear: typeof cl.seat_heater_rear_left === 'number' ? 1 : 0,
+    CoolL: num(cl.seat_fan_front_left, 0),
+    CoolR: num(cl.seat_fan_front_right, 0),
+    CanCool: (typeof cl.seat_fan_front_left === 'number' || cfg.forceCool) ? 1 : 0,
+    Wheel: (cl.steering_wheel_heater || cl.steering_wheel_heat_level) ? 1 : 0,
+    RearDefrost: cl.is_rear_defroster_on ? 1 : 0,
+    Windows: (vs.fd_window || vs.fp_window || vs.rd_window || vs.rp_window) ? 1 : 0,
+    Split: cfg.split ? 1 : 0,
+    Dist: carVector(d).dist,
+    Bearing: carVector(d).bearing
   };
 }
+// ---------- distance & direction to the car ----------
+var phonePos = null;
+function updatePhonePos(cb) {
+  if (!navigator.geolocation) return cb && cb();
+  navigator.geolocation.getCurrentPosition(function (p) {
+    phonePos = { lat: p.coords.latitude, lon: p.coords.longitude }; if (cb) cb();
+  }, function () { if (cb) cb(); }, { enableHighAccuracy: true, maximumAge: 30000, timeout: 10000 });
+}
+function rad(x) { return x * Math.PI / 180; }
+function carVector(d) {
+  var ds = (d && d.drive_state) || {};
+  if (!phonePos || typeof ds.latitude !== 'number') return { dist: -1, bearing: 0 };
+  var R = 6371000, la1 = rad(phonePos.lat), la2 = rad(ds.latitude), dl = rad(ds.longitude - phonePos.lon);
+  var a = Math.pow(Math.sin((la2 - la1) / 2), 2) + Math.cos(la1) * Math.cos(la2) * Math.pow(Math.sin(dl / 2), 2);
+  var dist = 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+  var y = Math.sin(dl) * Math.cos(la2), x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dl);
+  var brg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  return { dist: Math.round(dist), bearing: Math.round(brg) };
+}
+function num(v, d) { return typeof v === 'number' ? v : (v === true ? 1 : (v === false ? 0 : d)); }
+
 function cached() { return T.getJSON('tr_last') || { at: 0, d: {} }; }
 function sendCached(state, text) { var c = cached(); send(statusMsg(c.d, c.at, state, text)); }
 function stateForError(e) {
@@ -123,10 +159,16 @@ function optimistic(name, value) {
     case 'trunk': vs.rt = vs.rt ? 0 : 1; break;
     case 'climate_on': cl.is_climate_on = true; break;
     case 'climate_off': cl.is_climate_on = false; cl.is_front_defroster_on = false; break;
-    case 'set_temp': cl.driver_temp_setting = value; break;
+    case 'set_temp': cl.driver_temp_setting = value; cl.passenger_temp_setting = value; break;
     case 'defrost_on': cl.is_front_defroster_on = true; cl.is_climate_on = true; break;
     case 'defrost_off': cl.is_front_defroster_on = false; break;
-    case 'seat': cl.seat_heater_left = value; break;
+    case 'seat': cl[['seat_heater_left', 'seat_heater_right', 'seat_heater_rear_left', 'seat_heater_rear_center', 'seat_heater_rear_right'][(value >> 4) & 15]] = value & 15; break;
+    case 'cool': cl[((value >> 4) & 15) ? 'seat_fan_front_right' : 'seat_fan_front_left'] = value & 15; break;
+    case 'wheel_on': cl.steering_wheel_heater = true; break;
+    case 'wheel_off': cl.steering_wheel_heater = false; break;
+    case 'vent': vs.fd_window = vs.fp_window = vs.rd_window = vs.rp_window = 1; break;
+    case 'close_windows': vs.fd_window = vs.fp_window = vs.rd_window = vs.rp_window = 0; break;
+    case 'set_temps': cl.driver_temp_setting = value[0]; cl.passenger_temp_setting = value[1]; break;
   }
   localStorage.setItem('tr_last', JSON.stringify({ at: c.at || Date.now(), d: d }));
   send(statusMsg(d, c.at, STATE.ONLINE, ''));
@@ -138,6 +180,7 @@ function runCommand(id, value) {
   if (!name) return send({ Type: TYPE.RESULT, Cmd: id, Value: 0, Text: 'Unknown command' });
   var arg = value;
   if (name === 'set_temp') arg = value / 10;
+  if (name === 'set_temps') arg = [((value >> 16) & 0xffff) / 10, (value & 0xffff) / 10];
   T.command(name, arg, progress, function (e) {
     var cfg = T.cfg();
     if (e) {
@@ -159,13 +202,14 @@ function runCommand(id, value) {
 Pebble.addEventListener('ready', function () {
   if (!configured()) return sendCached(STATE.SETUP, 'Open settings on phone');
   sendCached(STATE.BUSY, '');
-  refresh(false);
+  updatePhonePos(function () { refresh(false); });
 });
 
 Pebble.addEventListener('appmessage', function (e) {
   var p = e.payload || {};
   if (p.Type === TYPE.CMD) runCommand(p.Cmd, p.Value || 0);
-  else if (p.Type === TYPE.REFRESH) refresh(p.Value === 1);
+  else if (p.Type === TYPE.REFRESH) updatePhonePos(function () { refresh(p.Value === 1); });
+  else if (p.Type === TYPE.SETTING) { var c = T.cfg(); c.split = !!p.Value; T.saveCfg(c); sendCached(STATE.ONLINE, ''); }
 });
 
 Pebble.addEventListener('showConfiguration', function () {
