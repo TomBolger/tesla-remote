@@ -1,3 +1,5 @@
 build/
 node_modules/
 *.pbw
+test/pb
+test/state.json

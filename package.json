@@ -1,7 +1,7 @@
 {
   "name": "tesla-remote",
   "author": "Tesla Remote contributors",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "keywords": [
     "pebble-app",
     "tesla"
@@ -73,7 +73,12 @@
       "MenuTitle",
       "MenuRows",
       "Shift",
-      "Speed"
+      "Speed",
+      "Seat3L",
+      "Seat3R",
+      "Has3rd",
+      "Layout",
+      "Tonneau"
     ],
     "resources": {
       "media": [
@@ -85,88 +90,413 @@
         },
         {
           "type": "bitmap",
-          "name": "TRUNK_0",
-          "file": "images/car/trunk_0.png"
+          "name": "CAR0_BASE",
+          "file": "images/car/car0_base.png"
         },
         {
           "type": "bitmap",
-          "name": "TRUNK_1",
-          "file": "images/car/trunk_1.png"
+          "name": "CAR0_T1",
+          "file": "images/car/car0_t1.png"
         },
         {
           "type": "bitmap",
-          "name": "TRUNK_2",
-          "file": "images/car/trunk_2.png"
+          "name": "CAR0_T2",
+          "file": "images/car/car0_t2.png"
         },
         {
           "type": "bitmap",
-          "name": "TRUNK_3",
-          "file": "images/car/trunk_3.png"
+          "name": "CAR0_T3",
+          "file": "images/car/car0_t3.png"
         },
         {
           "type": "bitmap",
-          "name": "TRUNK_4",
-          "file": "images/car/trunk_4.png"
+          "name": "CAR0_T4",
+          "file": "images/car/car0_t4.png"
         },
         {
           "type": "bitmap",
-          "name": "TRUNK_5",
-          "file": "images/car/trunk_5.png"
+          "name": "CAR0_T5",
+          "file": "images/car/car0_t5.png"
         },
         {
           "type": "bitmap",
-          "name": "TRUNK_6",
-          "file": "images/car/trunk_6.png"
+          "name": "CAR0_T6",
+          "file": "images/car/car0_t6.png"
         },
         {
           "type": "bitmap",
-          "name": "TRUNK_7",
-          "file": "images/car/trunk_7.png"
+          "name": "CAR0_T7",
+          "file": "images/car/car0_t7.png"
         },
         {
           "type": "bitmap",
-          "name": "FRUNK_0",
-          "file": "images/car/frunk_0.png"
+          "name": "CAR0_F1",
+          "file": "images/car/car0_f1.png"
         },
         {
           "type": "bitmap",
-          "name": "FRUNK_1",
-          "file": "images/car/frunk_1.png"
+          "name": "CAR0_F2",
+          "file": "images/car/car0_f2.png"
         },
         {
           "type": "bitmap",
-          "name": "FRUNK_2",
-          "file": "images/car/frunk_2.png"
+          "name": "CAR0_F3",
+          "file": "images/car/car0_f3.png"
         },
         {
           "type": "bitmap",
-          "name": "FRUNK_3",
-          "file": "images/car/frunk_3.png"
+          "name": "CAR0_F4",
+          "file": "images/car/car0_f4.png"
         },
         {
           "type": "bitmap",
-          "name": "FRUNK_4",
-          "file": "images/car/frunk_4.png"
+          "name": "CAR0_F5",
+          "file": "images/car/car0_f5.png"
         },
         {
           "type": "bitmap",
-          "name": "FRUNK_5",
-          "file": "images/car/frunk_5.png"
+          "name": "CAR0_F6",
+          "file": "images/car/car0_f6.png"
         },
         {
           "type": "bitmap",
-          "name": "FRUNK_6",
-          "file": "images/car/frunk_6.png"
+          "name": "CAR0_F7",
+          "file": "images/car/car0_f7.png"
         },
         {
           "type": "bitmap",
-          "name": "FRUNK_7",
-          "file": "images/car/frunk_7.png"
+          "name": "CAR1_BASE",
+          "file": "images/car/car1_base.png"
         },
         {
           "type": "bitmap",
-          "name": "SEATS",
-          "file": "images/car/seats.png"
+          "name": "CAR1_T1",
+          "file": "images/car/car1_t1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_T2",
+          "file": "images/car/car1_t2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_T3",
+          "file": "images/car/car1_t3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_T4",
+          "file": "images/car/car1_t4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_T5",
+          "file": "images/car/car1_t5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_T6",
+          "file": "images/car/car1_t6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_T7",
+          "file": "images/car/car1_t7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_F1",
+          "file": "images/car/car1_f1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_F2",
+          "file": "images/car/car1_f2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_F3",
+          "file": "images/car/car1_f3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_F4",
+          "file": "images/car/car1_f4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_F5",
+          "file": "images/car/car1_f5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_F6",
+          "file": "images/car/car1_f6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR1_F7",
+          "file": "images/car/car1_f7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_BASE",
+          "file": "images/car/car2_base.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_T1",
+          "file": "images/car/car2_t1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_T2",
+          "file": "images/car/car2_t2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_T3",
+          "file": "images/car/car2_t3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_T4",
+          "file": "images/car/car2_t4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_T5",
+          "file": "images/car/car2_t5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_T6",
+          "file": "images/car/car2_t6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_T7",
+          "file": "images/car/car2_t7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_F1",
+          "file": "images/car/car2_f1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_F2",
+          "file": "images/car/car2_f2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_F3",
+          "file": "images/car/car2_f3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_F4",
+          "file": "images/car/car2_f4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_F5",
+          "file": "images/car/car2_f5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_F6",
+          "file": "images/car/car2_f6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR2_F7",
+          "file": "images/car/car2_f7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_BASE",
+          "file": "images/car/car3_base.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_T1",
+          "file": "images/car/car3_t1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_T2",
+          "file": "images/car/car3_t2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_T3",
+          "file": "images/car/car3_t3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_T4",
+          "file": "images/car/car3_t4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_T5",
+          "file": "images/car/car3_t5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_T6",
+          "file": "images/car/car3_t6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_T7",
+          "file": "images/car/car3_t7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_F1",
+          "file": "images/car/car3_f1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_F2",
+          "file": "images/car/car3_f2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_F3",
+          "file": "images/car/car3_f3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_F4",
+          "file": "images/car/car3_f4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_F5",
+          "file": "images/car/car3_f5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_F6",
+          "file": "images/car/car3_f6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR3_F7",
+          "file": "images/car/car3_f7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_BASE",
+          "file": "images/car/car4_base.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_T1",
+          "file": "images/car/car4_t1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_T2",
+          "file": "images/car/car4_t2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_T3",
+          "file": "images/car/car4_t3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_T4",
+          "file": "images/car/car4_t4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_T5",
+          "file": "images/car/car4_t5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_T6",
+          "file": "images/car/car4_t6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_T7",
+          "file": "images/car/car4_t7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_F1",
+          "file": "images/car/car4_f1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_F2",
+          "file": "images/car/car4_f2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_F3",
+          "file": "images/car/car4_f3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_F4",
+          "file": "images/car/car4_f4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_F5",
+          "file": "images/car/car4_f5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_F6",
+          "file": "images/car/car4_f6.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "CAR4_F7",
+          "file": "images/car/car4_f7.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "SEATS0",
+          "file": "images/car/seats0.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "SEATS1",
+          "file": "images/car/seats1.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "SEATS2",
+          "file": "images/car/seats2.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "SEATS3",
+          "file": "images/car/seats3.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "SEATS4",
+          "file": "images/car/seats4.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "SEATS5",
+          "file": "images/car/seats5.png"
+        },
+        {
+          "type": "bitmap",
+          "name": "SEATS6",
+          "file": "images/car/seats6.png"
         },
         {
           "type": "bitmap",
@@ -234,6 +564,10 @@
           "file": "images/car/charge_7.png"
         }
       ]
-    }
+    },
+    "usesPermissions": [
+      "Internet",
+      "Location"
+    ]
   }
 }

@@ -53,6 +53,8 @@ function actions() {
   wait(2500, function () {
     var res = sent.filter(function (m) { return m.Type === 3; });
     console.log('\nACTION charge_limit:90 ->', JSON.stringify(res));
+    var firstStatus = sent.filter(function (m) { return m.Type === 1; })[0];
+    console.log((firstStatus && firstStatus.ChargeLimit === 90 ? 'PASS' : 'FAIL') + ' watch shows new limit as soon as the car accepts it');
     console.log('follow-up refreshes scheduled at (ms):', JSON.stringify(scheduled));
     console.log('car-server calls:', JSON.stringify(calls.filter(function (c) { return c; })));
     var menus = sent.filter(function (m) { return m.Type === 8; }).map(function (m) { return m.MenuPage; });
@@ -62,7 +64,7 @@ function actions() {
     ['trunk_close', 'sentry:1', 'keeper:2', 'cop:2', 'cop_temp:3', 'auto_seat:21', 'port_close', 'charge_stop', 'charge_amps:16', 'auto_secure', 'guest:1', 'low_power:1', 'accessory:1', 'bioweapon:1'].reduce(function (p, a) {
       return function () { sent = []; handlers.appmessage({ payload: { Type: 9, Text: 'c:' + a } }); wait(1200, function () {
         var r = sent.filter(function (m) { return m.Type === 3; })[0];
-        var st2 = JSON.parse(fs.readFileSync(path.join(__dirname, 'state.json'))), l = st2.log.filter(function (x) { return x.cmd; }).pop();
+        var st2 = JSON.parse(fs.readFileSync(path.join(__dirname, 'state.json'))), l = st2.log.filter(function (x) { return x.cmd && x.cmd.indexOf('getVehicleData') < 0; }).pop();
         console.log((r && r.Value === 1 ? 'PASS ' : 'FAIL ') + a + '  -> car: ' + (l ? l.cmd.replace(/\s+/g, ' ').slice(0, 110) : '?'));
         p(); }); };
     }, function () { process.exit(0); })();

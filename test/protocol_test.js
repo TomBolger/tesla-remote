@@ -23,7 +23,8 @@ var steps = [
   ['lock'], ['unlock'], ['frunk'], ['trunk'], ['climate_on'], ['set_temp', 21.5], ['seat', 2],
   ['defrost_on'], ['defrost_off'], ['climate_off'], ['flash'],
   ['seat', 0x13], ['seat', 0x41], ['cool', 0x12], ['cool', 0x00], ['wheel_on'], ['wheel_off'],
-  ['vent'], ['close_windows'], ['set_temps', [21.5, 19]], ['honk', null, true]
+  ['vent'], ['close_windows'], ['set_temps', [21.5, 19]], ['seat', 0x52], ['seat', 0x61],
+  ['tonneau_open'], ['tonneau_close'], ['tonneau_stop'], ['honk', null, true]
 ];
 T.completeSignIn('CODE', prog, function (e) {
   console.log('signin:', e ? e.text : 'ok', 'vin=', T.cfg().vin);
@@ -42,6 +43,20 @@ T.completeSignIn('CODE', prog, function (e) {
   });
 });
 function finish() {
+  process.env.FAKE_GEAR = 'D';
+  T.vehicleData(function (e, d) {
+    var ds = (d || {}).drive_state || {};
+    console.log((ds.shift_state === 'D' && ds.speed === 37 ? 'PASS' : 'FAIL') + ' gear from signed query -> ' + ds.shift_state + ' ' + ds.speed);
+    process.env.FAKE_CAR = 'cybertruck';
+    T.vehicleData(function (e2, d2) {
+      var vs = (d2 || {}).vehicle_state || {};
+      console.log((vs.tonneau_state === 1 ? 'PASS' : 'FAIL') + ' tonneau from signed query -> ' + vs.tonneau_state);
+      delete process.env.FAKE_CAR;
+      finish2();
+    });
+  });
+}
+function finish2() {
   // Simulate the car rebooting (new epoch): the code should re-handshake and recover.
   var st = JSON.parse(fs.readFileSync(path.join(__dirname, 'state.json')));
   st.epoch = 'ffeeddccbbaa99887766554433221100'; fs.writeFileSync(path.join(__dirname, 'state.json'), JSON.stringify(st));

@@ -206,9 +206,55 @@ function vehicleData(cb) {
       }
       if (e) return cb(e);
       var d = j.response || {};
-      setJSON('tr_last', { at: Date.now(), d: d });
-      cb(null, d);
+      fillGaps(d, function () {
+        setJSON('tr_last', { at: Date.now(), d: d });
+        cb(null, d);
+      });
     });
+}
+// Newer cars leave the gear out of vehicle_data, and only report the Cybertruck tonneau over the
+// signed channel. Ask the car directly, but only when it matters: someone is in the car, or it's a Cybertruck.
+var SHIFTS = { 2: 'P', 3: 'R', 4: 'N', 5: 'D' };
+function fillGaps(d, done) {
+  var ds = d.drive_state = d.drive_state || {}, vs = d.vehicle_state = d.vehicle_state || {};
+  var isCT = /cyber/i.test(String((d.vehicle_config || {}).car_type || ''));
+  var needDrive = !ds.shift_state && vs.is_user_present !== false;
+  var needTonneau = isCT && typeof vs.tonneau_state !== 'number' && typeof vs.tonneau_state !== 'string';
+  var fields = [];
+  if (needDrive) fields.push(4);
+  if (needTonneau) fields.push(8);
+  if (!fields.length || !C.haveBigInt() || !cfg().privHex) return done();
+  signedData(fields, function (e, r) {
+    if (!e && r) {
+      if (r.shift) ds.shift_state = r.shift;
+      if (typeof r.speed === 'number' && ds.speed == null) ds.speed = r.speed;
+      if (typeof r.tonneau === 'number') vs.tonneau_state = r.tonneau;
+      if (typeof r.tonneauPct === 'number') vs.tonneau_percent_open = r.tonneauPct;
+    } else if (needDrive) ds.gear_unknown = true;
+    done();
+  });
+}
+// GetVehicleData over the signed channel. fields: 4 drive, 8 closures.
+function signedData(fields, cb) {
+  var ask = [1].concat(fields.map(function (f) { return P.fMsg(f); }));
+  sendSigned(DOMAIN_INFO, P.fMsg(2, P.fMsg.apply(null, ask)), function (e, m) {
+    if (e) return cb(e);
+    var vd = m && P.sub(m, 2), out = {};
+    var dr = vd && P.sub(vd, 5);
+    if (dr) {
+      var sh = P.sub(dr, 1);
+      if (sh) for (var k in SHIFTS) if (sh[k]) out.shift = SHIFTS[k];
+      var sp = P.first(dr, 102);
+      if (typeof sp === 'number') out.speed = sp;
+    }
+    var cl = vd && P.sub(vd, 9);
+    if (cl) {
+      var ts = P.first(cl, 23), tp = P.first(cl, 24);
+      if (typeof ts === 'number') out.tonneau = ts;
+      if (typeof tp === 'number') out.tonneauPct = tp;
+    }
+    cb(null, out);
+  });
 }
 function wake(progress, cb) {
   progress('Waking car');
@@ -366,9 +412,12 @@ function sendSigned(domain, payload, cb, attempt) {
         return sendSigned(domain, payload, cb, attempt + 1);
       }
       if (f) return cb(err('fault', FAULT_TEXT[f] || ('Car fault ' + f), f));
-      var problem = checkReply(domain, decryptReply(r, s));
+      var plain = decryptReply(r, s);
+      var problem = checkReply(domain, plain);
       if (problem) return cb(err('refused', problem));
-      cb(null);
+      var m = null;
+      try { m = plain && plain.length ? P.decode(plain) : null; } catch (x) { m = null; }
+      cb(null, m);
     });
   });
 }
@@ -382,6 +431,9 @@ var COMMANDS = {
   frunk: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(6, 3))]; },
   trunk: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(5, 3))]; },
   trunk_close: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(5, 4))]; },
+  tonneau_open: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(8, 3))]; },
+  tonneau_close: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(8, 4))]; },
+  tonneau_stop: function () { return [DOMAIN_VCSEC, P.fMsg(4, P.fVarint(8, 2))]; },
   auto_secure: function () { return [DOMAIN_VCSEC, P.fVarint(2, 29)]; },
   charge_start: function () { return [DOMAIN_INFO, infoAction(P.fMsg(6, P.fMsg(2)))]; },
   charge_stop: function () { return [DOMAIN_INFO, infoAction(P.fMsg(6, P.fMsg(5)))]; },
@@ -410,9 +462,10 @@ var COMMANDS = {
   },
   defrost_on: function () { return [DOMAIN_INFO, infoAction(P.fMsg(12, P.fBool(1, true)))]; },
   defrost_off: function () { return [DOMAIN_INFO, infoAction(P.fMsg(12))]; },
-  // value = position * 16 + level. Positions: 0 driver, 1 passenger, 2 rear left, 3 rear centre, 4 rear right.
+  // value = position * 16 + level. Positions: 0 driver, 1 passenger, 2 rear left, 3 rear centre, 4 rear right,
+  // 5 third row left, 6 third row right.
   seat: function (v) {
-    var pos = [7, 8, 9, 11, 12][Math.max(0, Math.min(4, (v >> 4) & 15))];
+    var pos = [7, 8, 9, 11, 12, 14, 15][Math.max(0, Math.min(6, (v >> 4) & 15))];
     var lv = [2, 3, 4, 5][Math.max(0, Math.min(3, v & 15))];
     return [DOMAIN_INFO, infoAction(P.fMsg(36, P.fMsg(1, P.fMsg(lv), P.fMsg(pos))))];
   },
@@ -452,8 +505,8 @@ function command(name, value, progress, cb) {
 }
 
 module.exports = {
-  FLEET: FLEET, SCOPES: SCOPES, cfg: cfg, saveCfg: saveCfg, tokens: tokens, getJSON: getJSON,
+  FLEET: FLEET, SCOPES: SCOPES, cfg: cfg, saveCfg: saveCfg, tokens: tokens, getJSON: getJSON, setJSON: setJSON,
   completeSignIn: completeSignIn, retryRegistration: retryRegistration, listVehicles: listVehicles, vehicleData: vehicleData,
-  vehicleState: vehicleState, wake: wake, nearbyChargers: nearbyChargers, command: command, COMMANDS: COMMANDS,
+  vehicleState: vehicleState, wake: wake, signedData: signedData, nearbyChargers: nearbyChargers, command: command, COMMANDS: COMMANDS,
   _internal: { handshake: handshake, sendSigned: sendSigned, tlv: tlv }
 };

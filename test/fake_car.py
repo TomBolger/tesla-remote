@@ -71,6 +71,13 @@ def handle_routable(raw):
         a = cs.Action(); a.ParseFromString(req.protobuf_message_as_bytes)
         entry['cmd'] = str(a).replace('\n', ' ').strip()
         out = cs.Response()
+        if a.vehicleAction.HasField('getVehicleData'):
+            g = a.vehicleAction.getVehicleData
+            if g.HasField('getDriveState'):
+                gear = os.environ.get('FAKE_GEAR', 'P'); getattr(out.vehicleData.drive_state.shift_state, gear).SetInParent()
+                out.vehicleData.drive_state.speed = 37 if gear == 'D' else 0
+            if g.HasField('getClosuresState'):
+                out.vehicleData.closures_state.tonneau_state = 1; out.vehicleData.closures_state.tonneau_percent_open = 100
         if a.vehicleAction.HasField('vehicleControlHonkHornAction'):
             out.actionStatus.result = cs.OPERATIONSTATUS_ERROR
             out.actionStatus.result_reason.plain_text = 'user_not_present'
@@ -120,7 +127,7 @@ def main():
             'vehicle_state': {'locked': True, 'ft': 0, 'rt': 0, 'vehicle_name': 'Blue Thunder', 'sentry_mode': False, 'odometer': 12345.6,
                               'tpms_pressure_fl': 2.9, 'tpms_pressure_fr': 2.9, 'tpms_pressure_rl': 2.85, 'tpms_pressure_rr': 2.9,
                               'car_version': '2026.38.4 abc', 'software_update': {'status': 'available', 'version': '2026.44'},
-                              'df': 0, 'pf': 0, 'dr': 0, 'pr': 1, 'fd_window': 0, 'fp_window': 0, 'rd_window': 0, 'rp_window': 0, 'is_user_present': False},
-            'drive_state': {'shift_state': 'D', 'speed': 45}, 'vehicle_config': {'car_type': 'model3'}, 'gui_settings': {'gui_temperature_units': 'F', 'gui_distance_units': 'mi/hr'}}})
+                              'df': 0, 'pf': 0, 'dr': 0, 'pr': 1, 'fd_window': 0, 'fp_window': 0, 'rd_window': 0, 'rp_window': 0, 'is_user_present': True},
+            'drive_state': {'shift_state': None, 'speed': None}, 'vehicle_config': {'car_type': os.environ.get('FAKE_CAR', 'model3')}, 'gui_settings': {'gui_temperature_units': 'F', 'gui_distance_units': 'mi/hr'}}})
     save(); out(404, {'error': 'not found ' + path})
 main()

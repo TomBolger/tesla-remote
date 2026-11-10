@@ -9,9 +9,10 @@ var TYPE = { STATUS: 1, CMD: 2, RESULT: 3, REFRESH: 4, PROGRESS: 5, SETTING: 6, 
 // Watch button commands, by number (matches src/c/main.c)
 var CMDS = [null, 'lock', 'unlock', 'frunk', 'trunk', 'climate_on', 'climate_off', 'set_temp',
   'defrost_on', 'defrost_off', 'seat', 'flash', 'honk', 'cool', 'wheel_on', 'wheel_off', 'vent', 'close_windows',
-  'set_temps', 'trunk_close'];
+  'set_temps', 'trunk_close', 'tonneau_open', 'tonneau_close', 'tonneau_stop'];
 var STATE = { UNKNOWN: 0, ONLINE: 1, ASLEEP: 2, OFFLINE: 3, ERROR: 4, SETUP: 5, PAIR: 6, BUSY: 7 };
 var NO_TEMP = -1000;
+var VERSION = '1.0.0';
 
 // ---------- message queue (Pebble only allows one in flight) ----------
 var queue = [], sending = false;
@@ -72,6 +73,36 @@ function hasRearCenter(d) {
   if (typeof cl.seat_heater_rear_center !== 'number') return false;
   return modelCode(vc.car_type) !== 2;
 }
+function hasThirdRow(d) {
+  var cl = d.climate_state || {}, vc = d.vehicle_config || {};
+  if (typeof cl.seat_heater_third_row_left === 'number') return true;
+  var t = String(vc.third_row_seats || '');
+  return !!t && !/none|unknown/i.test(t);
+}
+// Which seat map to draw: 0 the model's 5-seat map, 1 Model Y 7-seat, 2 Model X 6-seat, 3 Model X 7-seat.
+function seatLayout(d) {
+  var m = modelCode((d.vehicle_config || {}).car_type);
+  if (m === 4 && hasThirdRow(d)) return 1;
+  if (m === 3) return hasRearCenter(d) || !hasThirdRow(d) ? 3 : 2;
+  return 0;
+}
+// Gear: 0 parked, 1 drive, 2 reverse, 3 neutral, 4 unknown (car is awake but didn't say).
+function gear(d) {
+  var ds = d.drive_state || {}, vs = d.vehicle_state || {};
+  var g = ({ D: 1, R: 2, N: 3, P: 0 })[ds.shift_state];
+  if (g !== undefined) return g;
+  if ((ds.speed || 0) > 0) return 1;
+  if (vs.is_user_present === false) return 0;
+  return 4;
+}
+// Cybertruck tonneau: -1 none/unknown, else 0 closed, 1 open, 2 ajar, 5 opening, 6 closing.
+function tonneau(d) {
+  var vs = d.vehicle_state || {}, t = vs.tonneau_state;
+  if (typeof t === 'string') t = ({ closed: 0, open: 1, ajar: 2, opening: 5, closing: 6 })[t.toLowerCase()];
+  if (typeof t !== 'number') return -1;
+  if (t === 3 || t === 4) return -1;
+  return t;
+}
 function statusMsg(d, at, carState, text) {
   d = d || {};
   var ch = d.charge_state || {}, cl = d.climate_state || {}, vs = d.vehicle_state || {}, vc = d.vehicle_config || {};
@@ -122,7 +153,12 @@ function statusMsg(d, at, carState, text) {
     CarName: String(cfg.carName || vs.vehicle_name || d.display_name || 'Tesla').slice(0, 24),
     Split: cfg.split ? 1 : 0,
     // gear: 0 parked/unknown, 1 drive, 2 reverse, 3 neutral; speed in the user's units
-    Shift: ({ D: 1, R: 2, N: 3 })[(d.drive_state || {}).shift_state] || 0,
+    Shift: live ? gear(d) : 0,
+    Seat3L: lvl(cl.seat_heater_third_row_left),
+    Seat3R: lvl(cl.seat_heater_third_row_right),
+    Has3rd: hasThirdRow(d) ? 1 : 0,
+    Layout: seatLayout(d),
+    Tonneau: tonneau(d),
     Speed: Math.round(((d.drive_state || {}).speed || 0) * (units & 2 ? 1 : 1.609344)),
     Dist: vec.dist,
     Bearing: vec.bearing
@@ -148,6 +184,7 @@ function refresh(forceWake, done) {
       if (e) { sendCached(stateForError(e), e.text); return done(); }
       lastState = STATE.ONLINE;
       send(statusMsg(d, Date.now(), STATE.ONLINE, ''));
+      watchDriving(d);
       done();
     });
   }
@@ -165,6 +202,70 @@ function refresh(forceWake, done) {
     sendCached(st === 'offline' ? STATE.OFFLINE : STATE.ASLEEP, '');
     done();
   });
+}
+
+// While the car is being driven, keep the watch current: one refresh a minute, only while the app is open.
+var driveTimer = null;
+function watchDriving(d) {
+  clearTimeout(driveTimer); driveTimer = null;
+  var g = gear(d);
+  if (g >= 1 && g <= 3) driveTimer = setTimeout(function () { updatePhonePos(function () { refresh(false, resendMenu); }); }, 60000);
+}
+
+// Once the car has accepted a command, show its result everywhere right away. The follow-up
+// reads below then confirm it (or correct it) with what the car actually reports.
+function applyConfirmed(name, arg) {
+  var c = cached(), d = c.d || {};
+  if (!d.charge_state) return;
+  var ch = d.charge_state = d.charge_state || {}, cl = d.climate_state = d.climate_state || {};
+  var vs = d.vehicle_state = d.vehicle_state || {};
+  var seatKeys = ['seat_heater_left', 'seat_heater_right', 'seat_heater_rear_left', 'seat_heater_rear_center',
+    'seat_heater_rear_right', 'seat_heater_third_row_left', 'seat_heater_third_row_right'];
+  function windows(v) { vs.fd_window = vs.fp_window = vs.rd_window = vs.rp_window = v; }
+  switch (name) {
+    case 'lock': vs.locked = true; break;
+    case 'unlock': vs.locked = false; break;
+    case 'auto_secure': vs.locked = true; windows(0); break;
+    case 'frunk': vs.ft = 1; break;
+    case 'trunk': vs.rt = 1; break;
+    case 'trunk_close': vs.rt = 0; break;
+    case 'tonneau_open': vs.tonneau_state = 5; break;
+    case 'tonneau_close': vs.tonneau_state = 6; break;
+    case 'climate_on': cl.is_climate_on = true; break;
+    case 'climate_off':
+      cl.is_climate_on = false; cl.is_front_defroster_on = false; cl.defrost_mode = 0; break;
+    case 'defrost_on':
+      cl.is_climate_on = true; cl.is_front_defroster_on = true; cl.is_rear_defroster_on = true; cl.defrost_mode = 2; break;
+    case 'defrost_off': cl.is_front_defroster_on = false; cl.defrost_mode = 0; break;
+    case 'set_temp': cl.driver_temp_setting = arg; cl.passenger_temp_setting = arg; break;
+    case 'set_temps': cl.driver_temp_setting = arg[0]; cl.passenger_temp_setting = arg[1]; break;
+    case 'seat': cl[seatKeys[Math.min(6, (arg >> 4) & 15)]] = arg & 15; break;
+    case 'cool': cl[((arg >> 4) & 15) === 1 ? 'seat_fan_front_right' : 'seat_fan_front_left'] = arg & 15; break;
+    case 'wheel_on': case 'wheel_off':
+      cl.steering_wheel_heater = name === 'wheel_on';
+      if (typeof cl.steering_wheel_heat_level === 'number') cl.steering_wheel_heat_level = name === 'wheel_on' ? 3 : 0;
+      break;
+    case 'vent': windows(1); break;
+    case 'close_windows': windows(0); break;
+    case 'charge_start': if (ch.charging_state && ch.charging_state !== 'Disconnected') ch.charging_state = 'Charging'; break;
+    case 'charge_stop': if (ch.charging_state === 'Charging') ch.charging_state = 'Stopped'; break;
+    case 'charge_limit': ch.charge_limit_soc = arg; break;
+    case 'charge_amps': ch.charge_current_request = arg; break;
+    case 'port_open': ch.charge_port_door_open = true; break;
+    case 'port_close': ch.charge_port_door_open = false; break;
+    case 'sentry': vs.sentry_mode = !!arg; break;
+    case 'guest': vs.guest_mode_enabled = !!arg; break;
+    case 'keeper': cl.climate_keeper_mode = ['off', 'on', 'dog', 'camp'][arg] || 'off'; if (arg) cl.is_climate_on = true; break;
+    case 'cop': cl.cabin_overheat_protection = ['Off', 'On', 'FanOnly'][arg] || 'Off'; break;
+    case 'cop_temp': cl.cop_activation_temperature = ['', 'Low', 'Medium', 'High'][arg] || cl.cop_activation_temperature; break;
+    case 'bioweapon': cl.bioweapon_mode = !!arg; break;
+    case 'auto_seat': cl[Math.floor(arg / 10) === 1 ? 'auto_seat_climate_left' : 'auto_seat_climate_right'] = !!(arg % 10); break;
+    default: return;
+  }
+  T.setJSON('tr_last', { at: Date.now(), d: d });
+  lastState = STATE.ONLINE;
+  send(statusMsg(d, Date.now(), STATE.ONLINE, ''));
+  resendMenu();
 }
 
 // After every command, read the car's real state 3 s, 13 s and 43 s later. The watch only
@@ -189,7 +290,8 @@ function runNamed(name, arg, cmdId) {
     } else {
       var c = T.cfg();
       if (!c.paired || c.needPair) { c.paired = true; c.needPair = false; T.saveCfg(c); }
-      send({ Type: TYPE.RESULT, Cmd: cmdId || 0, Value: 1, Text: 'Sent' });
+      send({ Type: TYPE.RESULT, Cmd: cmdId || 0, Value: 1, Text: 'Done' });
+      applyConfirmed(name, arg);
     }
     scheduleFollowUps();
   });
@@ -218,6 +320,18 @@ function pressure(bar, units) {
 }
 function dist(mi, units) { return (units & 2) ? mi.toFixed(1) + ' mi' : (mi * 1.609344).toFixed(1) + ' km'; }
 
+// Cybertruck: the tailgate opens remotely but must be closed by hand; the tonneau is powered.
+function cargoRows(d, rows) {
+  var vs = d.vehicle_state || {};
+  // Cybertruck: the tailgate opens remotely but must be closed by hand; the tonneau is powered.
+  rows.push(vs.rt ? row('Tailgate is open', 'Close it by hand', '') : row('Open tailgate', '', 'k:Open tailgate?:trunk'));
+  var tn = tonneau(d), tp = vs.tonneau_percent_open;
+  var tSub = ({ 0: 'Closed', 1: 'Open', 2: 'Partly open', 5: 'Opening', 6: 'Closing' })[tn] || 'Unknown';
+  if (typeof tp === 'number' && tp > 0 && tp < 100) tSub += ' · ' + tp + '%';
+  if (tn === 5 || tn === 6) rows.push(row('Stop tonneau', tSub, 'c:tonneau_stop'));
+  rows.push(row('Open tonneau', tn === 1 ? 'Tonneau is open' : tSub, 'k:Open tonneau?:tonneau_open'));
+  rows.push(row('Close tonneau', tn === 0 ? 'Tonneau is closed' : tSub, 'k:Close tonneau?:tonneau_close'));
+}
 function buildPage(page, cb) {
   var d = cached().d || {}, ch = d.charge_state || {}, cl = d.climate_state || {}, vs = d.vehicle_state || {};
   var u = unitsFlags(d), cfg = T.cfg(), rows = [], title = 'More';
@@ -315,8 +429,14 @@ function buildPage(page, cb) {
       rows.push(row('Vent windows', '', 'c:vent'));
       rows.push(row('Close windows', '', 'c:close_windows'));
       rows.push(row('Open frunk', vs.ft ? 'Frunk is open' : '', 'k:Open frunk?:frunk'));
-      rows.push(vs.rt ? row('Close trunk', 'Trunk is open', 'k:Close trunk?:trunk_close') : row('Open trunk', '', 'k:Open trunk?:trunk'));
+      if (modelCode((d.vehicle_config || {}).car_type) === 5) cargoRows(d, rows);
+      else rows.push(vs.rt ? row('Close trunk', 'Trunk is open', 'k:Close trunk?:trunk_close') : row('Open trunk', '', 'k:Open trunk?:trunk'));
       break;
+    case 'cargo':
+      title = 'Cargo';
+      cargoRows(d, rows);
+      break;
+
     case 'info':
       title = 'Car info';
       rows.push(row('Tires front', pressure(vs.tpms_pressure_fl, u) + ' / ' + pressure(vs.tpms_pressure_fr, u),
@@ -334,6 +454,7 @@ function buildPage(page, cb) {
       if (typeof vs.is_user_present === 'boolean') rows.push(row('Someone in car', vs.is_user_present ? 'Yes' : 'No', ''));
       var at = cached().at;
       rows.push(row('Last update', at ? hm((Date.now() - at) / 60000) + ' ago' : 'Never', ''));
+      rows.push(row('Tesla Remote', 'Version ' + VERSION + ' · free & open source', ''));
       break;
     case 'power':
       title = 'Car power';
