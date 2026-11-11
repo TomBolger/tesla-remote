@@ -41,12 +41,7 @@ def render(size, scale, ink=(0, 0, 0, 255), bg=(0, 0, 0, 0), pad=None):
 def main():
     # Watch launcher icon: 25x25, black on transparent.
     render(25, 1).save(os.path.join(ROOT, 'resources', 'images', 'menu_icon.png'))
-    out = os.path.join(ROOT, 'store')
-    os.makedirs(out, exist_ok=True)
-    white = (255, 255, 255, 255)
-    render(144, 5, bg=white).save(os.path.join(out, 'icon-large-144.png'))
-    render(48, 2, bg=white).save(os.path.join(out, 'icon-small-48.png'))
-    print('icons written')
+    print('watch icon written (store icons: make_store_icon.py)')
 
 
 if __name__ == '__main__':
