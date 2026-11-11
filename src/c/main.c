@@ -1056,7 +1056,12 @@ static const char *state_label(void) {
   switch (s.car_state) {
     case S_ONLINE: {
       static char drive[24];
-      if (s.shift == 1 || s.shift == 3) { snprintf(drive, sizeof(drive), "Driving %d %s", s.speed, is_mi() ? "mph" : "km/h"); return drive; }
+      const char *u = is_mi() ? "mph" : "km/h";
+      if (s.shift == 1 && s.speed > 0) { snprintf(drive, sizeof(drive), "Driving %d %s", s.speed, u); return drive; }
+      if (s.shift == 5 && s.speed > 0) { snprintf(drive, sizeof(drive), "Driving ~%d %s", s.speed, u); return drive; }
+      if (s.shift == 1) return "In Drive";
+      if (s.shift == 3) return "In Neutral";
+      if (s.shift == 5) return "Driving";
       if (s.shift == 2) return "Reversing";
       if (s.shift == 4) return s.charging == 2 ? "Charging" : "Awake";
       return s.charging == 2 ? "Charging" : "Parked";
@@ -1238,7 +1243,7 @@ static void main_update(Layer *layer, GContext *ctx) {
   // --- second row: inside temperature under the battery; status + distance on the right ---
   char line[48], dist[20];
   fmt_dist(dist, sizeof(dist));
-  if (s.car_state == S_ONLINE && s.shift >= 1 && s.shift <= 3) dist[0] = 0;
+  if (s.car_state == S_ONLINE && ((s.shift >= 1 && s.shift <= 3) || s.shift == 5)) dist[0] = 0;
   const char *st = state_label();
   if (s.car_state == S_ASLEEP && s.updated) {
     int mins = (time(NULL) - s.updated) / 60;

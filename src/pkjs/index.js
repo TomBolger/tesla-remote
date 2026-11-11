@@ -86,12 +86,13 @@ function seatLayout(d) {
   if (m === 3) return hasRearCenter(d) || !hasThirdRow(d) ? 3 : 2;
   return 0;
 }
-// Gear: 0 parked, 1 drive, 2 reverse, 3 neutral, 4 unknown (car is awake but didn't say).
+// Gear: 0 parked, 1 drive, 2 reverse, 3 neutral, 4 unknown (awake, someone may be in it), 5 moving (gear unknown).
 function gear(d) {
   var ds = d.drive_state || {}, vs = d.vehicle_state || {};
   var g = ({ D: 1, R: 2, N: 3, P: 0 })[ds.shift_state];
   if (g !== undefined) return g;
   if ((ds.speed || 0) > 0) return 1;
+  if (ds.moving) return 5;  // moving, gear not reported; speed estimated from GPS
   if (vs.is_user_present === false) return 0;
   return 4;
 }
@@ -159,7 +160,7 @@ function statusMsg(d, at, carState, text) {
     Has3rd: hasThirdRow(d) ? 1 : 0,
     Layout: seatLayout(d),
     Tonneau: tonneau(d),
-    Speed: Math.round(((d.drive_state || {}).speed || 0) * (units & 2 ? 1 : 1.609344)),
+    Speed: Math.round(((d.drive_state || {}).speed || (d.drive_state || {}).est_speed || 0) * (units & 2 ? 1 : 1.609344)),
     Dist: vec.dist,
     Bearing: vec.bearing
   };
@@ -215,7 +216,9 @@ var driveTimer = null;
 function watchDriving(d) {
   clearTimeout(driveTimer); driveTimer = null;
   var g = gear(d);
-  if (g >= 1 && g <= 3) driveTimer = setTimeout(function () { updatePhonePos(function () { refresh(false); }); }, 60000);
+  // in use but gear unknown: check again soon so movement can be measured from two GPS fixes
+  var wait = g === 4 ? 20000 : 60000;
+  if (g >= 1) driveTimer = setTimeout(function () { updatePhonePos(function () { refresh(false); }); }, wait);
 }
 
 // Once the car has accepted a command, show its result everywhere right away. The follow-up
@@ -459,6 +462,8 @@ function buildPage(page, cb) {
       if (typeof vs.is_user_present === 'boolean') rows.push(row('Someone in car', vs.is_user_present ? 'Yes' : 'No', ''));
       var at = cached().at;
       rows.push(row('Last update', at ? hm((Date.now() - at) / 60000) + ' ago' : 'Never', ''));
+      var ns = T.getJSON('tr_nostate');
+      if (ns && ns.at > Date.now() - 86400000) rows.push(row('Gear & speed', 'Estimated from GPS', ''));
       rows.push(row('Tesla Remote', 'Version ' + VERSION + ' · free & open source', ''));
       break;
     case 'power':

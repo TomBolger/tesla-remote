@@ -218,7 +218,10 @@ var SHIFTS = { 2: 'P', 3: 'R', 4: 'N', 5: 'D' };
 function fillGaps(d, done) {
   var ds = d.drive_state = d.drive_state || {}, vs = d.vehicle_state = d.vehicle_state || {};
   var isCT = /cyber/i.test(String((d.vehicle_config || {}).car_type || ''));
-  var needDrive = !ds.shift_state && vs.is_user_present !== false;
+  estimateMotion(ds);
+  // Over the internet, Tesla may refuse the signed state query; after a refusal, don't spend more requests on it for a day.
+  var refused = getJSON('tr_nostate') || {};
+  var needDrive = !ds.shift_state && vs.is_user_present !== false && !(refused.at > Date.now() - 86400000);
   var needTonneau = isCT && typeof vs.tonneau_state !== 'number' && typeof vs.tonneau_state !== 'string';
   var fields = [];
   if (needDrive) fields.push(4);
@@ -230,9 +233,27 @@ function fillGaps(d, done) {
       if (typeof r.speed === 'number' && ds.speed == null) ds.speed = r.speed;
       if (typeof r.tonneau === 'number') vs.tonneau_state = r.tonneau;
       if (typeof r.tonneauPct === 'number') vs.tonneau_percent_open = r.tonneauPct;
-    } else if (needDrive) ds.gear_unknown = true;
+    } else if (e) {
+      setJSON('tr_nostate', { at: Date.now(), why: e.text || e.code || 'refused' });
+    }
     done();
   });
+}
+// Tesla's data feed no longer reports gear or speed for many cars. Work out movement from where the car
+// was on the previous read: distance / time between GPS fixes. Sets est_speed (mph) and moving.
+function estimateMotion(ds) {
+  var prev = ((getJSON('tr_last') || {}).d || {}).drive_state || {};
+  if (typeof ds.latitude !== 'number' || typeof prev.latitude !== 'number') return;
+  var t1 = ds.gps_as_of || ds.timestamp / 1000, t0 = prev.gps_as_of || prev.timestamp / 1000;
+  var dt = t1 - t0;
+  if (!(dt >= 10 && dt <= 600)) return;
+  var rad = Math.PI / 180, la1 = prev.latitude * rad, la2 = ds.latitude * rad;
+  var a = Math.pow(Math.sin((la2 - la1) / 2), 2) +
+    Math.cos(la1) * Math.cos(la2) * Math.pow(Math.sin((ds.longitude - prev.longitude) * rad / 2), 2);
+  var meters = 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(a)));
+  var mph = meters / dt * 2.23694;
+  ds.moving = mph >= 3;
+  ds.est_speed = ds.moving ? Math.round(mph) : 0;
 }
 // GetVehicleData over the signed channel. fields: 4 drive, 8 closures.
 function signedData(fields, cb) {
@@ -507,6 +528,6 @@ function command(name, value, progress, cb) {
 module.exports = {
   FLEET: FLEET, SCOPES: SCOPES, cfg: cfg, saveCfg: saveCfg, tokens: tokens, getJSON: getJSON, setJSON: setJSON,
   completeSignIn: completeSignIn, retryRegistration: retryRegistration, listVehicles: listVehicles, vehicleData: vehicleData,
-  vehicleState: vehicleState, wake: wake, signedData: signedData, nearbyChargers: nearbyChargers, command: command, COMMANDS: COMMANDS,
+  vehicleState: vehicleState, wake: wake, signedData: signedData, estimateMotion: estimateMotion, nearbyChargers: nearbyChargers, command: command, COMMANDS: COMMANDS,
   _internal: { handshake: handshake, sendSigned: sendSigned, tlv: tlv }
 };
