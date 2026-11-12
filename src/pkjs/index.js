@@ -521,6 +521,12 @@ Pebble.addEventListener('showConfiguration', function () {
     paired: !!c.paired, needPair: !!c.needPair, relay: c.relay || '', lastError: c.lastError || '',
     bigint: C.haveBigInt()
   };
+  // Everything needed to skip setup after a reinstall. The page locks it with the user's password before showing it.
+  if (c.clientId && c.privHex) {
+    var keep = {};
+    Object.keys(c).forEach(function (k) { if (['lastError', 'registerError', 'needPair'].indexOf(k) < 0) keep[k] = c[k]; });
+    current.backup = { v: 1, cfg: keep, tokens: tk };
+  }
   Pebble.openURL(CONFIG_URL + '#' + encodeURIComponent(JSON.stringify(current)));
 });
 
@@ -529,6 +535,13 @@ Pebble.addEventListener('webviewclosed', function (e) {
   var r;
   try { r = JSON.parse(decodeURIComponent(e.response)); } catch (x) {
     try { r = JSON.parse(e.response); } catch (y) { return; }
+  }
+  if (r.restore && r.restore.cfg) {
+    // Restored from a backup: same key, same Tesla app, same car. Fresh car sessions are made on first use.
+    T.saveCfg(r.restore.cfg);
+    if (r.restore.tokens && r.restore.tokens.refresh) T.setJSON('tr_tokens', r.restore.tokens);
+    send({ Type: TYPE.PROGRESS, Text: 'Restoring' });
+    return refresh(false);
   }
   var c = T.cfg();
   ['clientId', 'domain', 'region', 'redirectUri', 'vin', 'carName', 'tempUnit', 'distUnit', 'relay'].forEach(function (k) {
