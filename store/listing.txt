@@ -1,6 +1,7 @@
 TESLA REMOTE - store listing text
 
 Name: Tesla Remote
+Author: TomBolger
 Type: Watchapp
 Category: Remotes
 Version: 1.0.0

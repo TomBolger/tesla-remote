@@ -1,6 +1,6 @@
 {
   "name": "tesla-remote",
-  "author": "Tesla Remote contributors",
+  "author": "TomBolger",
   "version": "1.0.0",
   "keywords": [
     "pebble-app",
